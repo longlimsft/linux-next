@@ -1482,6 +1482,9 @@ void smbd_destroy(struct TCP_Server_Info *server)
 
 	info->transport_status = SMBD_DESTROYED;
 
+	server->smbd_conn = NULL;
+	synchronize_srcu(&server->srcu_mr);
+
 	destroy_workqueue(info->workqueue);
 	kfree(info);
 }

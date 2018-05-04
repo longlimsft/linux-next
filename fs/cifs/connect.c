@@ -761,6 +761,7 @@ static void clean_demultiplex_info(struct TCP_Server_Info *server)
 		 */
 	}
 
+	cleanup_srcu_struct(&server->srcu_mr);
 	kfree(server->hostname);
 	kfree(server);
 
@@ -2345,6 +2346,7 @@ cifs_get_tcp_session(struct smb_vol *volume_info)
 			tcp_ses, (struct sockaddr *)&volume_info->dstaddr);
 		if (tcp_ses->smbd_conn) {
 			cifs_dbg(VFS, "RDMA transport established\n");
+			init_srcu_struct(&tcp_ses->srcu_mr);
 			rc = 0;
 			goto smbd_connected;
 		} else {

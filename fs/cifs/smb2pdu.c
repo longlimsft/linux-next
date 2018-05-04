@@ -2608,11 +2608,14 @@ smb2_new_read_req(void **buf, unsigned int *total_len,
 		struct smbd_buffer_descriptor_v1 *v1;
 		bool need_invalidate =
 			io_parms->tcon->ses->server->dialect == SMB30_PROT_ID;
+		int idx;
 
+		idx = srcu_read_lock(&server->srcu_mr);
 		rdata->mr = smbd_register_mr(
 				server->smbd_conn, rdata->pages,
 				rdata->nr_pages, rdata->tailsz,
 				true, need_invalidate);
+		srcu_read_unlock(&server->srcu_mr, idx);
 		if (!rdata->mr)
 			return -ENOBUFS;
 
@@ -2985,11 +2988,14 @@ smb2_async_writev(struct cifs_writedata *wdata,
 
 		struct smbd_buffer_descriptor_v1 *v1;
 		bool need_invalidate = server->dialect == SMB30_PROT_ID;
+		int idx;
 
+		idx = srcu_read_lock(&server->srcu_mr);
 		wdata->mr = smbd_register_mr(
 				server->smbd_conn, wdata->pages,
 				wdata->nr_pages, wdata->tailsz,
 				false, need_invalidate);
+		srcu_read_unlock(&server->srcu_mr, idx);
 		if (!wdata->mr) {
 			rc = -ENOBUFS;
 			goto async_writev_out;
