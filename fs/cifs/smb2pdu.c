@@ -2617,7 +2617,7 @@ smb2_new_read_req(void **buf, unsigned int *total_len,
 				true, need_invalidate);
 		srcu_read_unlock(&server->srcu_mr, idx);
 		if (!rdata->mr)
-			return -ENOBUFS;
+			return -EAGAIN;
 
 		req->Channel = SMB2_CHANNEL_RDMA_V1_INVALIDATE;
 		if (need_invalidate)
@@ -2997,7 +2997,7 @@ smb2_async_writev(struct cifs_writedata *wdata,
 				false, need_invalidate);
 		srcu_read_unlock(&server->srcu_mr, idx);
 		if (!wdata->mr) {
-			rc = -ENOBUFS;
+			rc = -EAGAIN;
 			goto async_writev_out;
 		}
 		req->Length = 0;
