@@ -851,7 +851,7 @@ static int smbd_create_header(struct smbd_connection *info,
 
 	if (info->transport_status != SMBD_CONNECTED) {
 		log_outgoing(ERR, "disconnected not sending\n");
-		return -ENOENT;
+		return -EAGAIN;
 	}
 	atomic_dec(&info->send_credits);
 
@@ -977,6 +977,7 @@ static int smbd_post_send(struct smbd_connection *info,
 				wake_up(&info->wait_send_pending);
 		}
 		smbd_disconnect_rdma_connection(info);
+		rc = -EAGAIN;
 	} else
 		/* Reset timer for idle connection after packet is sent */
 		mod_delayed_work(info->workqueue, &info->idle_timer_work,
@@ -2062,7 +2063,7 @@ int smbd_send(struct smbd_connection *info, struct smb_rqst *rqst)
 	int rc;
 
 	if (info->transport_status != SMBD_CONNECTED) {
-		rc = -ENODEV;
+		rc = -EAGAIN;
 		goto done;
 	}
 
