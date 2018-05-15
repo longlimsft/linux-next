@@ -2768,6 +2768,7 @@ smb2_async_readv(struct cifs_readdata *rdata)
 			server->in_flight--;
 			spin_unlock(&server->req_lock);
 		}
+		cifs_small_buf_release(buf);
 		return rc;
 	}
 
