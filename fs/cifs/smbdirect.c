@@ -2388,14 +2388,17 @@ static struct smbd_mr *get_mr(struct smbd_connection *info)
 	struct smbd_mr *ret;
 	int rc;
 again:
-	if (info->transport_status != SMBD_CONNECTED) {
-		log_rdma_mr(ERR, "info->transport_status=%x\n",
-			info->transport_status);
+	rc = wait_event_interruptible(info->wait_mr,
+		atomic_read(&info->mr_ready_count) ||
+		info->transport_status != SMBD_CONNECTED);
+	if (rc) {
+		log_rdma_mr(ERR, "wait_event_interruptible rc=%x\n", rc);
 		return NULL;
 	}
 
-	if (!atomic_read(&info->mr_ready_count)) {
-		info->count_mr_busy++;
+	if (info->transport_status != SMBD_CONNECTED) {
+		log_rdma_mr(ERR, "info->transport_status=%x\n",
+			info->transport_status);
 		return NULL;
 	}
 
@@ -2445,7 +2448,7 @@ struct smbd_mr *smbd_register_mr(
 
 	smbdirect_mr = get_mr(info);
 	if (!smbdirect_mr) {
-		log_rdma_mr(INFO, "get_mr returning NULL\n");
+		log_rdma_mr(ERR, "get_mr returning NULL\n");
 		return NULL;
 	}
 	smbdirect_mr->need_invalidate = need_invalidate;
