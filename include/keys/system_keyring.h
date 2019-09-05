@@ -61,5 +61,8 @@ static inline struct key *get_ima_blacklist_keyring(void)
 }
 #endif /* CONFIG_IMA_BLACKLIST_KEYRING */
 
+#ifdef CONFIG_IMA_MEASURE_TRUSTED_KEYS
+extern struct key *get_trusted_keys(void);
+#endif /* CONFIG_IMA_MEASURE_TRUSTED_KEYS */
 
 #endif /* _KEYS_SYSTEM_KEYRING_H */

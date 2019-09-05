@@ -266,3 +266,18 @@ error:
 EXPORT_SYMBOL_GPL(verify_pkcs7_signature);
 
 #endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
+
+#ifdef CONFIG_IMA_MEASURE_TRUSTED_KEYS
+struct key *get_trusted_keys(void)
+{
+	struct key *trusted_keys;
+
+#ifdef CONFIG_SECONDARY_TRUSTED_KEYRING
+	trusted_keys = secondary_trusted_keys;
+#else
+	trusted_keys = builtin_trusted_keys;
+#endif
+
+	return trusted_keys;
+}
+#endif /* CONFIG_IMA_MEASURE_TRUSTED_KEYS */

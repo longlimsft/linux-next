@@ -403,6 +403,27 @@ extern void key_fsuid_changed(struct task_struct *tsk);
 extern void key_fsgid_changed(struct task_struct *tsk);
 extern void key_init(void);
 
+typedef int (*key_iterator_func)(void *key, u32 keylen,
+		const char *description);
+
+/*
+ * Context data used to iterate through the keys in a keyring.
+ *
+ *  size  - Total number of keys in the keyring
+ *  enumerated - Number of keys that have been enumerated so far
+ *  iterator - Pointer to the function called for each key
+ */
+struct keyring_iterator {
+	size_t size;
+	size_t enumerated;
+	key_iterator_func iterator;
+};
+
+#ifdef CONFIG_IMA_MEASURE_TRUSTED_KEYS
+extern long keyring_read_trusted_keys(
+	struct keyring_iterator *key_iterator);
+#endif /* CONFIG_IMA_MEASURE_TRUSTED_KEYS */
+
 #else /* CONFIG_KEYS */
 
 #define key_validate(k)			0
