@@ -474,6 +474,7 @@ struct block_device {
 	int			bd_fsfreeze_count;
 	/* Mutex for freeze */
 	struct mutex		bd_fsfreeze_mutex;
+	unsigned long           bd_flags;
 } __randomize_layout;
 
 /*
