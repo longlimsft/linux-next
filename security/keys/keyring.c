@@ -18,6 +18,9 @@
 #include <linux/err.h>
 #include <keys/keyring-type.h>
 #include <keys/user-type.h>
+#include <keys/asymmetric-type.h>
+#include <keys/system_keyring.h>
+#include <crypto/public_key.h>
 #include <linux/assoc_array_priv.h>
 #include <linux/uaccess.h>
 #include "internal.h"
@@ -1582,3 +1585,66 @@ void keyring_restriction_gc(struct key *keyring, struct key_type *dead_type)
 
 	kleave(" [restriction gc]");
 }
+
+#ifdef CONFIG_IMA_MEASURE_TRUSTED_KEYS
+static int keyring_keys_iterator(const void *object, void *data)
+{
+	struct keyring_iterator *key_iterator = data;
+	const struct key *key = keyring_ptr_to_key(object);
+	const struct public_key *pk;
+	int rc = 0;
+
+	if (key_iterator->enumerated < key_iterator->size) {
+		key_iterator->enumerated++;
+
+		if (key->type == &key_type_asymmetric) {
+			pk = key->payload.data[asym_crypto];
+			if ((pk != NULL) &&
+				(pk->keylen > 0) &&
+				(key->description != NULL)) {
+				rc = key_iterator->iterator(pk->key,
+					pk->keylen,
+					key->description);
+			}
+		}
+	}
+
+	return rc;
+}
+
+/*
+ * Read a list of keys from the given keyring.
+ *  keyring - Keyring to read the list of keys from
+ *  key_iterator - Keyring iterator
+ */
+long keyring_read_keys(
+	const struct key *keyring,
+	struct keyring_iterator *key_iterator)
+{
+	long ret = 0;
+
+	kenter("{%d}", key_serial(keyring));
+
+	key_iterator->size = keyring->keys.nr_leaves_on_tree;
+	key_iterator->enumerated = 0;
+	ret = assoc_array_iterate(&keyring->keys,
+				keyring_keys_iterator,
+				key_iterator);
+	if (ret == 0)
+		kleave(" = %ld [ok]", ret);
+	else
+		kleave(" = %ld [error]", ret);
+
+	return ret;
+}
+
+/*
+* Read a list of keys from the trusted_keys keyring.
+*  key_iterator - Keyring iterator
+*/
+long keyring_read_trusted_keys(
+	struct keyring_iterator *key_iterator)
+{
+	return keyring_read_keys(get_trusted_keys(), key_iterator);
+}
+#endif /* CONFIG_IMA_MEASURE_TRUSTED_KEYS */
