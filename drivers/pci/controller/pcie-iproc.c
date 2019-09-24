@@ -1918,7 +1918,7 @@ int iproc_pcie_setup(struct iproc_pcie *pcie, struct list_head *res)
 	if (ret)
 		return ret;
 
-#if CONFIG_PM_SLEEP
+#ifdef CONFIG_PM_SLEEP
 	pcie->paxb_map_regs = devm_kcalloc(dev, IPROC_PCIE_MAX_NUM_REG * 2,
 					   sizeof(*pcie->paxb_map_regs),
 					   GFP_KERNEL);
