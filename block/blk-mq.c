@@ -1476,6 +1476,24 @@ static void __blk_mq_delay_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async,
 		put_cpu();
 	}
 
+	/*
+	 * Queue a work to run queue.
+	 *
+	 * If this is a non-delayed run and a non-delayed work is already
+	 * scheduled, avoid scheduling the same work again.
+	 *
+	 * If this is a delayed run, unconditinally clear the
+	 * BLK_MQ_S_WORK_QUEUED bit so the next possible non-delayed run can
+	 * be queued before this delayed run gets to start.
+	 */
+
+	if (!msecs) {
+		if (test_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state))
+			return;
+		set_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
+	} else
+		clear_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
+
 	kblockd_mod_delayed_work_on(blk_mq_hctx_next_cpu(hctx), &hctx->run_work,
 				    msecs_to_jiffies(msecs));
 }
@@ -1561,6 +1579,7 @@ void blk_mq_stop_hw_queue(struct blk_mq_hw_ctx *hctx)
 	cancel_delayed_work(&hctx->run_work);
 
 	set_bit(BLK_MQ_S_STOPPED, &hctx->state);
+	clear_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
 }
 EXPORT_SYMBOL(blk_mq_stop_hw_queue);
 
@@ -1626,6 +1645,7 @@ static void blk_mq_run_work_fn(struct work_struct *work)
 	struct blk_mq_hw_ctx *hctx;
 
 	hctx = container_of(work, struct blk_mq_hw_ctx, run_work.work);
+	clear_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
 
 	/*
 	 * If we are stopped, don't run the queue.
