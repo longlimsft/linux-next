@@ -14,6 +14,9 @@
 #ifdef CONFIG_SYSCTL
 static struct ctl_table_header *ipe_sysctl_header;
 
+static int SYSCTL_ONE = 1;
+static int SYSCTL_ZERO;
+
 static const struct ctl_path ipe_sysctl_path[] = { {
 							   .procname = "ipe",
 						   },
@@ -27,8 +30,8 @@ static struct ctl_table ipe_sysctl_table[] = {
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = proc_dointvec_minmax,
-		.extra1 = SYSCTL_ZERO,
-		.extra2 = SYSCTL_ONE,
+		.extra1 = &SYSCTL_ZERO,
+		.extra2 = &SYSCTL_ONE,
 	},
 #endif /* !CONFIG_SECURITY_IPE_DISABLE_AUDIT */
 	{
@@ -37,8 +40,8 @@ static struct ctl_table ipe_sysctl_table[] = {
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = proc_dointvec_minmax,
-		.extra1 = SYSCTL_ZERO,
-		.extra2 = SYSCTL_ONE,
+		.extra1 = &SYSCTL_ZERO,
+		.extra2 = &SYSCTL_ONE,
 	},
 	{}
 };
@@ -70,7 +73,7 @@ static struct security_hook_list ipe_hooks[] __lsm_ro_after_init = {
 	LSM_HOOK_INIT(sb_free_security, ipe_sb_free_security),
 };
 
-static int __init ipe_init(void)
+void __init ipe_init(void)
 {
 	int rc = 0;
 
@@ -89,14 +92,7 @@ static int __init ipe_init(void)
 		pr_err("IPE failed to configure sysctl");
 
 	security_add_hooks(ipe_hooks, ARRAY_SIZE(ipe_hooks), "IPE");
-
-	return rc;
 }
-
-DEFINE_LSM(ipe) = {
-	.name = "ipe",
-	.init = ipe_init,
-};
 
 int enforce = 0;
 
