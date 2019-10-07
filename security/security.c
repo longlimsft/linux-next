@@ -83,6 +83,7 @@ int __init security_init(void)
 	capability_add_hooks();
 	yama_add_hooks();
 	loadpin_add_hooks();
+	ipe_init();	
 
 	/*
 	 * Load all the remaining security modules.
