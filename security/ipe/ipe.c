@@ -107,12 +107,12 @@ void __init ipe_init(void)
 	security_add_hooks(ipe_hooks, ARRAY_SIZE(ipe_hooks), "IPE");
 }
 
-int enforce = 1;
+int enforce = 0;
 
 #ifndef CONFIG_SECURITY_IPE_DISABLE_AUDIT
 
 /* Module Parameter for Default Behavior on Boot */
-module_param(enforce, int, 1);
+module_param(enforce, int, 0);
 MODULE_PARM_DESC(enforce, "Integrity Policy Enforcement");
 
 #endif /* CONFIG_SECURITY_IPE_DISABLE_AUDIT */
