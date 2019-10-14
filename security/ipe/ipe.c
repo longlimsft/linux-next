@@ -98,12 +98,12 @@ DEFINE_LSM(ipe) = {
 	.init = ipe_init,
 };
 
-int enforce = 1;
+int enforce = 0;
 
 #ifndef CONFIG_SECURITY_IPE_DISABLE_AUDIT
 
 /* Module Parameter for Default Behavior on Boot */
-module_param(enforce, int, 1);
+module_param(enforce, int, 0);
 MODULE_PARM_DESC(enforce, "Integrity Policy Enforcement");
 
 #endif /* CONFIG_SECURITY_IPE_DISABLE_AUDIT */
