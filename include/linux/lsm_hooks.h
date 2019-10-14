@@ -2081,10 +2081,5 @@ void __init loadpin_add_hooks(void);
 #else
 static inline void loadpin_add_hooks(void) { };
 #endif
-#ifdef CONFIG_SECURITY_IPE
-void __init ipe_init(void);
-#else
-static inline void ipe_init(void) { };
-#endif
 
 #endif /* ! __LINUX_LSM_HOOKS_H */

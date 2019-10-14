@@ -425,9 +425,6 @@ void dm_remap_zone_report(struct dm_target *ti, struct bio *bio,
 			  sector_t start);
 union map_info *dm_get_rq_mapinfo(struct request *rq);
 
-bool dm_is_bd_verity_verified(struct block_device *bdev);
-void dm_set_bd_verity_verified(struct block_device *bdev, bool is_verified);
-
 struct queue_limits *dm_get_queue_limits(struct mapped_device *md);
 
 /*
