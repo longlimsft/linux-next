@@ -7,7 +7,7 @@
 #include <linux/lsm_audit.h>
 #include "ipe-audit.h"
 
-#define BOOLTOSTR(b) b ? "true" : "false"
+#define BOOLTOSTR(b) (b) ? "true" : "false"
 
 const char *hook_names[] = { "execute", "kernel_read" };
 

@@ -17,7 +17,6 @@
 
 static void ipe_free_ctx(struct ipe_operation_ctx *ctx)
 {
-	/* __putname does not NULL check the free */
 	if (ctx->audit_pathname)
 		__putname(ctx->audit_pathname);
 	ctx->audit_pathname = NULL;
@@ -32,28 +31,13 @@ static void ipe_get_audit_pathname(struct ipe_operation_ctx *ctx,
 	char *pathbuf = NULL;
 	char *temp_path = NULL;
 	char *pos = NULL;
-	struct dentry *dentry;
 	struct super_block *sb;
 
 	/* No File to get Path From */
 	if (file == NULL)
 		return;
 
-	dentry = file->f_path.dentry;
-
-	/* No backing entry */
-	if (!dentry)
-		return;
-
-	sb = dentry->d_sb;
-
-	/* a socket */
-	if (sb->s_magic == SOCKFS_MAGIC)
-		return;
-
-	/* a pipe */
-	if (dentry->d_op && dentry->d_op->d_dname)
-		return;
+	sb = file->f_path.dentry->d_sb;
 
 	pathbuf = __getname();
 	if (!pathbuf)
@@ -67,7 +51,7 @@ static void ipe_get_audit_pathname(struct ipe_operation_ctx *ctx,
 	if (!temp_path)
 		goto err;
 
-	if (strlcpy(temp_path, pos, PATH_MAX) >= PATH_MAX)
+	if (strlcpy(temp_path, pos, PATH_MAX) > PATH_MAX)
 		goto err;
 
 	/* Transfer Buffer */
