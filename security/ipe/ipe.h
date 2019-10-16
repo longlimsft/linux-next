@@ -13,7 +13,8 @@ extern int enforce;
 extern int success_audit;
 
 struct ipe_operation_ctx {
-	enum ipe_hook op;
+	enum ipe_operation op;
+	enum ipe_hook hook;
 	bool dm_verity_verified;
 	bool boot_verified;
 	char *audit_pathname;

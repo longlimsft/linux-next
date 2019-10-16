@@ -17,7 +17,8 @@
 
 static void ipe_free_ctx(struct ipe_operation_ctx *ctx)
 {
-	if (ctx->audit_pathname)
+	/* __putname does not NULL check the free */
+	if (ctx->audit_pathname && !IS_ERR(ctx->audit_pathname))
 		__putname(ctx->audit_pathname);
 	ctx->audit_pathname = NULL;
 }
@@ -34,25 +35,36 @@ static void ipe_get_audit_pathname(struct ipe_operation_ctx *ctx,
 	struct super_block *sb;
 
 	/* No File to get Path From */
-	if (file == NULL)
-		return;
+	if (file == NULL) {
+		ctx->audit_pathname = ERR_PTR(-ENOENT);
+		goto err;
+	}
 
 	sb = file->f_path.dentry->d_sb;
 
 	pathbuf = __getname();
-	if (!pathbuf)
+	if (!pathbuf) {
+		ctx->audit_pathname = ERR_PTR(-ENOMEM);
 		goto err;
+	}
 
 	pos = d_absolute_path(&file->f_path, pathbuf, PATH_MAX);
-	if (IS_ERR(pos))
+	if (IS_ERR(pos)) {
+		/* Use the pointer field to store the error. */
+		ctx->audit_pathname = pos;
 		goto err;
+	}
 
 	temp_path = __getname();
-	if (!temp_path)
+	if (!temp_path) {
+		ctx->audit_pathname = ERR_PTR(-ENOMEM);
 		goto err;
+	}
 
-	if (strlcpy(temp_path, pos, PATH_MAX) > PATH_MAX)
+	if (strlcpy(temp_path, pos, PATH_MAX) > PATH_MAX) {
+		ctx->audit_pathname = ERR_PTR(-ENAMETOOLONG);
 		goto err;
+	}
 
 	/* Transfer Buffer */
 	ctx->audit_pathname = temp_path;

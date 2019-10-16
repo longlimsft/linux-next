@@ -10,7 +10,20 @@
 #include <linux/security.h>
 #include <linux/binfmts.h>
 
-enum ipe_hook { ipe_hook_execute = 0, ipe_hook_kernel_read, ipe_hook_max };
+enum ipe_operation {
+	ipe_operation_execute = 0,
+	ipe_operation_kernel_read,
+	ipe_operation_max
+};
+
+enum ipe_hook {
+	ipe_hook_exec = 0,
+	ipe_hook_mmap,
+	ipe_hook_kernel_read,
+	ipe_hook_kernel_load_data,
+	ipe_hook_mprotect,
+	ipe_hook_max
+};
 
 int ipe_on_mmap(struct file *file, unsigned long reqprot, unsigned long prot,
 		unsigned long flags);

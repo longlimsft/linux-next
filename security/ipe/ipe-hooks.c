@@ -19,7 +19,10 @@
 int ipe_on_mmap(struct file *file, unsigned long reqprot, unsigned long prot,
 		unsigned long flags)
 {
-	struct ipe_operation_ctx ctx = { .op = ipe_hook_execute };
+	struct ipe_operation_ctx ctx = {
+		.op = ipe_operation_execute,
+		.hook = ipe_hook_mmap
+	};
 
 	/*
 	 * If no executable flag set, allow load
@@ -35,7 +38,10 @@ int ipe_on_mmap(struct file *file, unsigned long reqprot, unsigned long prot,
  */
 int ipe_on_exec(struct linux_binprm *bprm)
 {
-	struct ipe_operation_ctx ctx = { .op = ipe_hook_execute };
+	struct ipe_operation_ctx ctx = {
+		.op = ipe_operation_execute,
+		.hook = ipe_hook_exec
+	};
 
 	return ipe_process_event(&ctx, bprm->file);
 }
@@ -45,7 +51,10 @@ int ipe_on_exec(struct linux_binprm *bprm)
  */
 int ipe_on_kernel_read(struct file *file, enum kernel_read_file_id id)
 {
-	struct ipe_operation_ctx ctx = { .op = ipe_hook_kernel_read };
+	struct ipe_operation_ctx ctx = {
+		.op = ipe_operation_kernel_read,
+		.hook = ipe_hook_kernel_read
+	};
 
 	return ipe_process_event(&ctx, file);
 }
@@ -58,7 +67,10 @@ int ipe_on_kernel_read(struct file *file, enum kernel_read_file_id id)
  */
 int ipe_on_kernel_load_data(enum kernel_load_data_id id)
 {
-	struct ipe_operation_ctx ctx = { .op = ipe_hook_kernel_read };
+	struct ipe_operation_ctx ctx = {
+		.op = ipe_operation_kernel_read,
+		.hook = ipe_hook_kernel_load_data
+	};
 
 	return ipe_process_event(&ctx, NULL);
 }
@@ -69,7 +81,10 @@ int ipe_on_kernel_load_data(enum kernel_load_data_id id)
 int ipe_on_set_executable(struct vm_area_struct *vma, unsigned long reqprot,
 			  unsigned long prot)
 {
-	struct ipe_operation_ctx ctx = { .op = ipe_hook_execute };
+	struct ipe_operation_ctx ctx = {
+		.op = ipe_operation_execute,
+		.hook = ipe_hook_mprotect
+	};
 
 	/* mmap already flagged as executable */
 	if (vma->vm_flags & VM_EXEC)
