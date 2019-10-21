@@ -14,65 +14,27 @@
 #include "ipe-pin.h"
 
 /*
+ * Function that represents the entry point of an exec call
+ */
+int ipe_on_exec(struct linux_binprm *bprm)
+{
+	return ipe_process_event(ipe_operation_execute, ipe_hook_exec,
+				 bprm->file);
+}
+
+/*
  * Function that represents the entry point of a mmap call
  */
 int ipe_on_mmap(struct file *file, unsigned long reqprot, unsigned long prot,
 		unsigned long flags)
 {
-	struct ipe_operation_ctx ctx = {
-		.op = ipe_operation_execute,
-		.hook = ipe_hook_mmap
-	};
-
 	/*
 	 * If no executable flag set, allow load
 	 */
 	if (!(reqprot & PROT_EXEC) || !(prot & PROT_EXEC))
 		return 0;
 
-	return ipe_process_event(&ctx, file);
-}
-
-/*
- * Function that represents the entry point of an exec call
- */
-int ipe_on_exec(struct linux_binprm *bprm)
-{
-	struct ipe_operation_ctx ctx = {
-		.op = ipe_operation_execute,
-		.hook = ipe_hook_exec
-	};
-
-	return ipe_process_event(&ctx, bprm->file);
-}
-
-/*
- * Function for loading anything into kernel memory
- */
-int ipe_on_kernel_read(struct file *file, enum kernel_read_file_id id)
-{
-	struct ipe_operation_ctx ctx = {
-		.op = ipe_operation_kernel_read,
-		.hook = ipe_hook_kernel_read
-	};
-
-	return ipe_process_event(&ctx, file);
-}
-
-/*
- * This LSM uses the kernel object to make decisions about enforcement.
- * This hook does not have any such structs available to it, so this is
- * disabled while this LSM is active on the system. As a result, all
- * kernel reads must come from a file.
- */
-int ipe_on_kernel_load_data(enum kernel_load_data_id id)
-{
-	struct ipe_operation_ctx ctx = {
-		.op = ipe_operation_kernel_read,
-		.hook = ipe_hook_kernel_load_data
-	};
-
-	return ipe_process_event(&ctx, NULL);
+	return ipe_process_event(ipe_operation_execute, ipe_hook_mmap, file);
 }
 
 /*
@@ -81,11 +43,6 @@ int ipe_on_kernel_load_data(enum kernel_load_data_id id)
 int ipe_on_set_executable(struct vm_area_struct *vma, unsigned long reqprot,
 			  unsigned long prot)
 {
-	struct ipe_operation_ctx ctx = {
-		.op = ipe_operation_execute,
-		.hook = ipe_hook_mprotect
-	};
-
 	/* mmap already flagged as executable */
 	if (vma->vm_flags & VM_EXEC)
 		return 0;
@@ -96,7 +53,30 @@ int ipe_on_set_executable(struct vm_area_struct *vma, unsigned long reqprot,
 	if (!(reqprot & PROT_EXEC) || !(prot & PROT_EXEC))
 		return 0;
 
-	return ipe_process_event(&ctx, vma->vm_file);
+	return ipe_process_event(ipe_operation_execute,
+				 ipe_hook_mprotect, vma->vm_file);
+}
+
+/*
+ * Function for loading anything into kernel memory
+ */
+int ipe_on_kernel_read(struct file *file, enum kernel_read_file_id id)
+{
+
+	return ipe_process_event(ipe_operation_kernel_read,
+				 ipe_hook_kernel_read, file);
+}
+
+/*
+ * This LSM uses the kernel object to make decisions about enforcement.
+ * This hook does not have any such structs available to it, so this is
+ * disabled while this LSM is active on the system. As a result, all
+ * kernel reads must come from a file.
+ */
+int ipe_on_kernel_load_data(enum kernel_load_data_id id)
+{
+	return ipe_process_event(ipe_operation_kernel_read,
+				 ipe_hook_kernel_load_data, NULL);
 }
 
 /*
