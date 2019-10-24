@@ -8,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/fs.h>
 
-int ipe_process_event(struct ipe_operation_ctx *ctx, struct file *file);
+int ipe_process_event(enum ipe_operation op, enum ipe_hook hook,
+		      struct file *file);
 
 #endif /* IPE_CORE_H */

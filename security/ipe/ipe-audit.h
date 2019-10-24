@@ -12,4 +12,6 @@
 void ipe_audit_message(struct ipe_operation_ctx *ctx, bool is_boot_verified,
 					   bool is_dmverity_verified);
 
+void ipe_build_audit_data(struct ipe_audit_data *audit_data, struct file *file);
+
 #endif /* IPE_AUDIT_H */

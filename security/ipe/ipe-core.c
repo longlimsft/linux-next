@@ -15,65 +15,36 @@
 #include "ipe-audit.h"
 #include "ipe-pin.h"
 
+static struct ipe_operation_ctx *ipe_alloc_ctx(enum ipe_operation op,
+					       enum ipe_hook hook)
+{
+	struct ipe_operation_ctx *ctx = NULL;
+
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return ERR_PTR(-ENOMEM);
+
+	ctx->op = op;
+	ctx->hook = hook;
+
+	ctx->audit_data = kzalloc(sizeof(*ctx->audit_data), GFP_KERNEL);
+	if (!ctx->audit_data) {
+		kfree(ctx);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	return ctx;
+}
+
 static void ipe_free_ctx(struct ipe_operation_ctx *ctx)
 {
 	/* __putname does not NULL check the free */
-	if (ctx->audit_pathname && !IS_ERR(ctx->audit_pathname))
-		__putname(ctx->audit_pathname);
-	ctx->audit_pathname = NULL;
-}
+	if (ctx->audit_data->audit_pathname &&
+	    !IS_ERR(ctx->audit_data->audit_pathname))
+		__putname(ctx->audit_data->audit_pathname);
 
-/*
- * Function to get the absolute pathname of a file, and populate that in ctx
- */
-static void ipe_get_audit_pathname(struct ipe_operation_ctx *ctx,
-				   struct file *file)
-{
-	char *pathbuf = NULL;
-	char *temp_path = NULL;
-	char *pos = NULL;
-	struct super_block *sb;
-
-	/* No File to get Path From */
-	if (file == NULL) {
-		ctx->audit_pathname = ERR_PTR(-ENOENT);
-		goto err;
-	}
-
-	sb = file->f_path.dentry->d_sb;
-
-	pathbuf = __getname();
-	if (!pathbuf) {
-		ctx->audit_pathname = ERR_PTR(-ENOMEM);
-		goto err;
-	}
-
-	pos = d_absolute_path(&file->f_path, pathbuf, PATH_MAX);
-	if (IS_ERR(pos)) {
-		/* Use the pointer field to store the error. */
-		ctx->audit_pathname = pos;
-		goto err;
-	}
-
-	temp_path = __getname();
-	if (!temp_path) {
-		ctx->audit_pathname = ERR_PTR(-ENOMEM);
-		goto err;
-	}
-
-	if (strlcpy(temp_path, pos, PATH_MAX) > PATH_MAX) {
-		ctx->audit_pathname = ERR_PTR(-ENAMETOOLONG);
-		goto err;
-	}
-
-	/* Transfer Buffer */
-	ctx->audit_pathname = temp_path;
-	temp_path = NULL;
-err:
-	if (pathbuf)
-		__putname(pathbuf);
-	if (temp_path)
-		__putname(temp_path);
+	kfree(ctx->audit_data);
+	kfree(ctx);
 }
 
 /*
@@ -87,7 +58,7 @@ static int ipe_apply_rules(struct ipe_operation_ctx *ctx, struct file *file)
 	bool is_boot_verified = false;
 	bool is_dmverity_verified = false;
 
-	ipe_get_audit_pathname(ctx, file);
+	ipe_build_audit_data(ctx->audit_data, file);
 
 	properties[ipe_property_dm_verity].populator(ctx, file);
 	properties[ipe_property_boot_verified].populator(ctx, file);
@@ -110,9 +81,15 @@ static int ipe_apply_rules(struct ipe_operation_ctx *ctx, struct file *file)
  * return success if the policy allows it and returns a -EACCES if the policy
  * blocks it.
  */
-int ipe_process_event(struct ipe_operation_ctx *ctx, struct file *file)
+int ipe_process_event(enum ipe_operation op, enum ipe_hook hook,
+		      struct file *file)
 {
 	int rc = 0;
+	struct ipe_operation_ctx *ctx;
+
+	ctx = ipe_alloc_ctx(op, hook);
+	if (IS_ERR(ctx))
+		return PTR_ERR(ctx);
 
 	rc = ipe_apply_rules(ctx, file);
 
