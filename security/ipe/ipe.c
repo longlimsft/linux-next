@@ -10,8 +10,22 @@
 #include "ipe.h"
 #include "ipe-property.h"
 #include "ipe-hooks.h"
+#include "ipe-audit.h"
 
 #ifdef CONFIG_SYSCTL
+static int ipe_switch_mode(struct ctl_table *table, int write,
+		       void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	int enf_old = enforce;
+	int ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+
+	if (ret == 0 && enf_old != enforce)
+		ipe_audit_mode_change();
+
+	return ret;
+}
+
+
 static struct ctl_table_header *ipe_sysctl_header;
 
 static int SYSCTL_ONE = 1;
@@ -29,7 +43,7 @@ static struct ctl_table ipe_sysctl_table[] = {
 		.data = &enforce,
 		.maxlen = sizeof(int),
 		.mode = 0644,
-		.proc_handler = proc_dointvec_minmax,
+		.proc_handler = ipe_switch_mode,
 		.extra1 = &SYSCTL_ZERO,
 		.extra2 = &SYSCTL_ONE,
 	},

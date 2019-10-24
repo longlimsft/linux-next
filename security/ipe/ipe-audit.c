@@ -6,6 +6,7 @@
 #include <linux/audit.h>
 #include <linux/lsm_audit.h>
 #include <linux/sched.h>
+#include "ipe.h"
 #include "ipe-audit.h"
 
 #define BOOLTOSTR(b) (b) ? "true" : "false"
@@ -171,4 +172,20 @@ void ipe_build_audit_data(struct ipe_audit_data *audit_data, struct file *file)
 
 	audit_data->inode_num = file->f_inode->i_ino;
 	audit_data->superblock_id = file->f_inode->i_sb->s_id;
+}
+
+
+void ipe_audit_mode_change(void)
+{
+	struct audit_buffer *ab;
+
+	ab = audit_log_start(audit_context(), GFP_ATOMIC | __GFP_NOWARN,
+			     AUDIT_INTEGRITY_STATUS);
+	if (!ab)
+		return;
+
+	audit_log_format(ab, "IPE switched to %s mode",
+			 (enforce) ? "enforce" : "audit");
+
+	audit_log_end(ab);
 }
