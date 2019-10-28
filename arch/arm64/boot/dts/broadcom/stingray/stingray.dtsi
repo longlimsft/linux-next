@@ -704,7 +704,6 @@
 			interrupts = <GIC_SPI 204 IRQ_TYPE_LEVEL_HIGH>;
 			bus-width = <8>;
 			clocks = <&sdio0_clk>;
-			iommus = <&smmu 0x6002 0x0000>;
 			status = "disabled";
 		};
 
