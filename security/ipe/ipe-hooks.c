@@ -63,6 +63,15 @@ int ipe_on_set_executable(struct vm_area_struct *vma, unsigned long reqprot,
 int ipe_on_kernel_read(struct file *file, enum kernel_read_file_id id)
 {
 
+	/* Overlake Errata: KEXEC / INITRAMFS are signed by IMA / FIT */
+	switch (id) {
+	case READING_KEXEC_IMAGE:
+	case READING_KEXEC_INITRAMFS:
+		return 0;
+	default:
+		break;
+	}
+
 	return ipe_process_event(ipe_operation_kernel_read,
 				 ipe_hook_kernel_read, file);
 }
