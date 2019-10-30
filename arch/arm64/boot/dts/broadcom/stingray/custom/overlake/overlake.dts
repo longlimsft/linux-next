@@ -108,3 +108,8 @@
 &pci_lpm_region {
 	status = "disabled";
 };
+
+&dma0 {
+       status = "disabled";
+};
+
