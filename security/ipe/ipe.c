@@ -108,7 +108,7 @@ void __init ipe_init(void)
 	security_add_hooks(ipe_hooks, ARRAY_SIZE(ipe_hooks), "IPE");
 }
 
-int enforce = 0;
+int enforce = 1;
 
 #ifndef CONFIG_SECURITY_IPE_DISABLE_AUDIT
 
