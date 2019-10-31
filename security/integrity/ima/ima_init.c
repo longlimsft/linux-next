@@ -100,9 +100,10 @@ int __init store_trusted_keyring_key(void *key,
 	static const char op[] = "store_trusted_keyring_key";
 	const char *audit_cause = "ENOMEM";
 	struct ima_template_entry *entry;
+	struct ima_template_desc *template = NULL;
 	struct integrity_iint_cache iint = {};
 	struct ima_event_data event_data = {.iint = &iint,
-					.filename = key_description,
+					.filename = ".builtin_trusted_keys",
 					.buf = key,
 					.buf_len = keylen};
 	int result = -ENOMEM;
@@ -126,15 +127,24 @@ int __init store_trusted_keyring_key(void *key,
 		goto err_out;
 	}
 
-	result = ima_alloc_init_template(&event_data, &entry, NULL);
+	template = lookup_template_desc("ima-buf");
+	result = template_desc_init_fields(template->fmt,
+					   &(template->fields),
+					   &(template->num_fields));
+	if (result < 0) {
+		audit_cause = "template_error";
+		goto err_out;;
+	}
+
+	result = ima_alloc_init_template(&event_data, &entry, template);
 	if (result < 0) {
 		audit_cause = "alloc_entry";
 		goto err_out;
 	}
 
 	result = ima_store_template(entry, violation, NULL,
-					key_description,
-					CONFIG_IMA_MEASURE_PCR_IDX);
+				    key_description,
+				    CONFIG_IMA_MEASURE_PCR_IDX);
 	if (result < 0) {
 		ima_free_template_entry(entry);
 		audit_cause = "store_entry";
