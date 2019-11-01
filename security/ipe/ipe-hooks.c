@@ -12,6 +12,7 @@
 #include "ipe-hooks.h"
 #include "ipe-core.h"
 #include "ipe-pin.h"
+#include "ipe-audit.h"
 
 /*
  * Function that represents the entry point of an exec call
@@ -33,6 +34,16 @@ int ipe_on_mmap(struct file *file, unsigned long reqprot, unsigned long prot,
 	 */
 	if (!(reqprot & PROT_EXEC) || !(prot & PROT_EXEC))
 		return 0;
+
+	/* Overlake *Temporary* Errata: Anonymous Memory is Allowed */
+	if (flags & MAP_ANONYMOUS) {
+		/*
+		 * This is still technically a failure, and should
+		 * be audited as such
+		 */
+		ipe_audit_anon_mem_exec();
+		return 0;
+	}
 
 	return ipe_process_event(ipe_operation_execute, ipe_hook_mmap, file);
 }

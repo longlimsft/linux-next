@@ -16,4 +16,6 @@ void ipe_build_audit_data(struct ipe_audit_data *audit_data, struct file *file);
 
 void ipe_audit_mode_change(void);
 
+void ipe_audit_anon_mem_exec(void);
+
 #endif /* IPE_AUDIT_H */

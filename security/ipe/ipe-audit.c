@@ -174,6 +174,28 @@ void ipe_build_audit_data(struct ipe_audit_data *audit_data, struct file *file)
 	audit_data->superblock_id = file->f_inode->i_sb->s_id;
 }
 
+void ipe_audit_anon_mem_exec(void)
+{
+	struct audit_buffer *ab;
+	char comm[sizeof(current->comm)];
+
+	ab = audit_log_start(audit_context(), GFP_ATOMIC | __GFP_NOWARN,
+			     AUDIT_INTEGRITY_POLICY_RULE);
+	if (!ab)
+		return;
+
+	audit_log_format(ab, "IPE=ctx ( pid: [%d] comm: [",
+			task_tgid_nr(current));
+
+	audit_log_untrustedstring(ab,
+		memcpy(comm, current->comm, sizeof(comm)));
+
+	/* Line over 80 characters: never break user-visible strings */
+	audit_log_format(ab, "] op: [execute] hook: [mmap] dmverity_verified: [false] boot_verified: [false] ) [ action = deny ]");
+
+	audit_log_end(ab);
+}
+
 
 void ipe_audit_mode_change(void)
 {
