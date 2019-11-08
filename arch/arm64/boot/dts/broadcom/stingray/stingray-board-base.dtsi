@@ -83,6 +83,11 @@
 			reg = <0x0 0x8f101000 0x0 0x1000>;
 			no-map;
 		};
+
+		crmu_pg_tbl{
+			reg = <0x8 0x80000000 0x0 0x100000>;
+			no-map;
+		};
 	};
 
 	nvme_lpm: nvme_lpm {
