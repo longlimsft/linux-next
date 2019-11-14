@@ -1442,6 +1442,8 @@ static int storvsc_device_configure(struct scsi_device *sdevice)
 			sdevice->no_write_same = 0;
 	}
 
+	scsi_change_queue_depth(sdevice, sdevice->host->can_queue);
+
 	return 0;
 }
 
@@ -1691,7 +1693,6 @@ static struct scsi_host_template scsi_driver = {
 	.eh_timed_out =		storvsc_eh_timed_out,
 	.slave_alloc =		storvsc_device_alloc,
 	.slave_configure =	storvsc_device_configure,
-	.cmd_per_lun =		2048,
 	.this_id =		-1,
 	/* Make sure we dont get a sg segment crosses a page boundary */
 	.dma_boundary =		PAGE_SIZE-1,
