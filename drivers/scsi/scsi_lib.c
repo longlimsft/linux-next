@@ -607,12 +607,17 @@ static bool scsi_end_request(struct request *req, blk_status_t error,
 	 */
 	percpu_ref_get(&q->q_usage_counter);
 
+	/*
+	 * One smp_mb() is implied by either rq->end_io or
+	 * blk_mq_free_request for ordering writing .device_busy in
+	 * scsi_device_unbusy() and reading sdev->restart.
+	 */
 	__blk_mq_end_request(req, error);
 
 	if (scsi_target(sdev)->single_lun ||
 	    !list_empty(&sdev->host->starved_list))
 		kblockd_schedule_work(&sdev->requeue_work);
-	else
+	else if (READ_ONCE(sdev->restart))
 		blk_mq_run_hw_queues(q, true);
 
 	percpu_ref_put(&q->q_usage_counter);
@@ -1632,8 +1637,42 @@ static bool scsi_mq_get_budget(struct blk_mq_hw_ctx *hctx)
 	struct request_queue *q = hctx->queue;
 	struct scsi_device *sdev = q->queuedata;
 
-	if (scsi_dev_queue_ready(q, sdev))
+	if (scsi_dev_queue_ready(q, sdev)) {
+		WRITE_ONCE(sdev->restart, 0);
 		return true;
+	}
+
+	/*
+	 * If all in-flight requests originated from this LUN are completed
+	 * before setting .restart, sdev->device_busy will be observed as
+	 * zero, then blk_mq_delay_run_hw_queue() will dispatch this request
+	 * soon. Otherwise, completion of one of these request will observe
+	 * the .restart flag, and the request queue will be run for handling
+	 * this request, see scsi_end_request().
+	 *
+	 * However, the .restart flag may be cleared from other dispatch code
+	 * path after one inflight request is completed, then:
+	 *
+	 * 1) if this request is dispatched from scheduler queue or sw queue one
+	 * by one, this request will be handled in that dispatch path too given
+	 * the request still stays at scheduler/sw queue when calling .get_budget()
+	 * callback.
+	 *
+	 * 2) if this request is dispatched from hctx->dispatch or
+	 * blk_mq_flush_busy_ctxs(), this request will be put into hctx->dispatch
+	 * list soon, and blk-mq will be responsible for covering it, see
+	 * blk_mq_dispatch_rq_list().
+	 */
+	WRITE_ONCE(sdev->restart, 1);
+
+	/*
+	 * Order writting .restart and reading .device_busy, and make sure
+	 * .restart is visible to scsi_end_request(). Its pair is implied by
+	 * __blk_mq_end_request() in scsi_end_request() for ordering
+	 * writing .device_busy in scsi_device_unbusy() and reading .restart.
+	 *
+	 */
+	smp_mb();
 
 	if (atomic_read(&sdev->device_busy) == 0 && !scsi_device_blocked(sdev))
 		blk_mq_delay_run_hw_queue(hctx, SCSI_QUEUE_DELAY);
