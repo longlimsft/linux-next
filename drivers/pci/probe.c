@@ -2276,6 +2276,8 @@ static struct pci_dev *pci_scan_device(struct pci_bus *bus, int devfn)
 		return NULL;
 	}
 
+	trace_printk("bus %px devfn %d dev %px dev numa node %d\n", bus, devfn, dev, dev->dev.numa_node);
+
 	return dev;
 }
 
