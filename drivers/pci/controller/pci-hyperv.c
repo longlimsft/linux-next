@@ -1836,8 +1836,8 @@ static void pci_assign_numa_node(struct hv_pcibus_device *hbus)
 
 	trace_printk("pci bus=%px\n", bus);
 	list_for_each_entry(dev, &bus->devices, bus_list) {
-		trace_printk("devfn=%d wslot=%px\n", dev->devfn, get_pcichild_wslot(hbus, devfn_to_wslot(dev->devfn)));
 		hv_dev = get_pcichild_wslot(hbus, devfn_to_wslot(dev->devfn));
+		trace_printk("devfn=%d wslot=%px flags=%x node=%d\n", dev->devfn, hv_dev, hv_dev->desc.flags, hv_dev->desc.virtual_numa_node);
 		if (hv_dev && hv_dev->desc.flags & HV_PCI_DEVICE_FLAG_NUMA_AFFINITY)
 			set_dev_node(&dev->dev, hv_dev->desc.virtual_numa_node);
 	}
@@ -2426,6 +2426,7 @@ static void hv_pci_onchannelcallback(void *context)
 					break;
 				}
 
+				trace_printk("got PCI_BUS_RELATIONS\n");
 				hv_pci_devices_present(hbus, bus_rel);
 				break;
 
@@ -2441,6 +2442,7 @@ static void hv_pci_onchannelcallback(void *context)
 					break;
 				}
 
+				trace_printk("got PCI_BUS_RELATIONS2\n");
 				hv_pci_devices_present2(hbus, bus_rel2);
 				break;
 
