@@ -131,6 +131,8 @@
 
 #if (ENABLE_I2C1 == 1)
 &i2c1 {
+	status = "okay";
+
 	pcf8574: pcf8574@27 {
 		compatible = "nxp,pcf8574a";
 		gpio-controller;

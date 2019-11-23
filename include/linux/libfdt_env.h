@@ -3,7 +3,10 @@
 #define LIBFDT_ENV_H
 
 #include <linux/kernel.h>	/* For INT_MAX */
+<<<<<<< HEAD
 #include <linux/limits.h>	/* For UINT32_MAX */
+=======
+>>>>>>> v4.19.85
 #include <linux/string.h>
 
 #include <asm/byteorder.h>
