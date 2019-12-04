@@ -103,7 +103,7 @@ int __init store_trusted_keyring_key(void *key,
 	struct ima_template_desc *template = NULL;
 	struct integrity_iint_cache iint = {};
 	struct ima_event_data event_data = {.iint = &iint,
-					.filename = ".builtin_trusted_keys",
+					.filename = ".builtin_trusted_public_key",
 					.buf = key,
 					.buf_len = keylen};
 	int result = -ENOMEM;
