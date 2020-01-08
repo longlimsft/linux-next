@@ -1844,7 +1844,7 @@ static int storvsc_probe(struct hv_device *device,
 	/*
 	 * Set the number of HW queues we are supporting.
 	 */
-	host->nr_hw_queues = num_present_cpus();
+//	host->nr_hw_queues = num_present_cpus();
 
 	/*
 	 * Set the error handler work queue.
