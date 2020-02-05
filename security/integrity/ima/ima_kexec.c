@@ -86,7 +86,7 @@ void ima_add_kexec_buffer(struct kimage *image)
 {
 	struct kexec_buf kbuf = { .image = image, .buf_align = PAGE_SIZE,
 				  .buf_min = 0, .buf_max = ULONG_MAX,
-				  .top_down = true };
+				  .top_down = false };
 	unsigned long binary_runtime_size;
 
 	/* use more understandable variable names than defined in kbuf */

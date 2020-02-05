@@ -314,7 +314,7 @@ int load_other_segments(struct kimage *image,
 	/* not across 2MB boundary */
 	kbuf.buf_align = SZ_2M;
 	kbuf.buf_max = ULONG_MAX;
-	kbuf.top_down = true;
+	kbuf.top_down = false;
 
 	ret = kexec_add_buffer(&kbuf);
 	if (ret)
