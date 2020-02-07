@@ -70,9 +70,41 @@
 		linux,sml-size = <0x10000>;
 	};
 
+	/* pmem0: 66M SOC-OS Logging */
 	pmem@980000000 {
 		compatible = "pmem-region";
-		reg = <0x00000009 0x80000000 0x00000000 0x80000000>;
+		reg = <0x00000009 0x80000000 0x00000000 0x04200000>;
+		volatile;
+	};
+
+	/* pmem1: 10M MOS Logging */
+	pmem@984000000 {
+		compatible = "pmem-region";
+		reg = <0x00000009 0x84200000 0x00000000 0x00A00000>;
+		volatile;
+	};
+
+	/* pmem2: 4M eMMC encryption key */
+	pmem@984800000 {
+		compatible = "pmem-region";
+		reg = <0x00000009 0x84C00000 0x00000000 0x00400000>;
+		volatile;
+	};
+
+	/* pmem3: 4M time deltas */
+	pmem@984C00000 {
+		compatible = "pmem-region";
+		reg = <0x00000009 0x85000000 0x00000000 0x00400000>;
+		volatile;
+	};
+
+	/*
+	 * pmem4: 1964M for netdatapath. This gets hot-added during runtime, therefore
+	 * must always be the last one
+	 */
+	pmem@985000000 {
+		compatible = "pmem-region";
+		reg = <0x00000009 0x85400000 0x00000000 0x7AC00000>;
 		volatile;
 		numa-node-id = <0>;
 	};
