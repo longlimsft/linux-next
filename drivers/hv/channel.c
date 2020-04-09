@@ -262,6 +262,7 @@ int vmbus_open(struct vmbus_channel *newchannel,
 
 	err = __vmbus_open(newchannel, userdata, userdatalen,
 			   onchannelcallback, context);
+	printk(KERN_ERR "err %d\n", err);
 	if (err)
 		vmbus_free_ring(newchannel);
 
@@ -693,6 +694,9 @@ int vmbus_disconnect_ring(struct vmbus_channel *channel)
 
 	if (channel->primary_channel != NULL)
 		return -EINVAL;
+
+	printk(KERN_ERR "check %s\n", __func__);
+	dump_stack();
 
 	list_for_each_entry_safe(cur_channel, tmp, &channel->sc_list, sc_list) {
 		if (cur_channel->rescind)
