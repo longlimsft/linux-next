@@ -26,4 +26,10 @@ config HYPERV_BALLOON
 	help
 	  Select this option to enable Hyper-V Balloon driver.
 
+config HYPERV_RIMBAUD
+	tristate "Microsoft Azure Rimbaud driver"
+	depends on HYPERV
+	help
+	  Select this option to enable Microsoft Azure Rimbaud driver
+
 endmenu
