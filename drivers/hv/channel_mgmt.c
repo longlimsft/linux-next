@@ -37,6 +37,15 @@
 
 static void init_vp_index(struct vmbus_channel *channel, u16 dev_type);
 
+static const guid_t vpci_ignore_instances[] = {
+	/*
+	 * Rimbaud instance ID in VPCI introduced by FlexIOV
+	 * {d4573da2-2caa-4711-a8f9-bbabf4ee9685}
+	 */
+	GUID_INIT(0xd4573da2, 0x2caa, 0x4711, 0xa8, 0xf9, \
+                          0xbb, 0xab, 0xf4, 0xee, 0x96, 0x85),
+};
+
 static const struct vmbus_device vmbus_devs[] = {
 	/* IDE */
 	{ .dev_type = HV_IDE,
@@ -132,6 +141,12 @@ static const struct vmbus_device vmbus_devs[] = {
 	{ .dev_type = HV_DM,
 	  HV_DM_GUID,
 	  .perf_device = false,
+	},
+
+	/* Rimbaud */
+	{ .dev_type = HV_RIMBAUD,
+	  HV_RIMBAUD_GUID,
+	  .perf_device = true,
 	},
 
 	/* Unknown GUID */
@@ -447,6 +462,16 @@ void vmbus_free_channels(void)
 	}
 }
 
+static bool ignore_pcie_device(struct vmbus_channel *channel)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(vpci_ignore_instances); i++)
+		if (guid_equal(&vpci_ignore_instances[i],
+			       &channel->offermsg.offer.if_instance))
+			return true;
+	return false;
+}
+
 /* Note: the function can run concurrently for primary/sub channels. */
 static void vmbus_add_channel_work(struct work_struct *work)
 {
@@ -458,6 +483,11 @@ static void vmbus_add_channel_work(struct work_struct *work)
 	int ret;
 
 	dev_type = hv_get_dev_type(newchannel);
+	if (dev_type == HV_PCIE && ignore_pcie_device(newchannel)) {
+		pr_info("Ignore instance %pUl over VPCI\n",
+			&newchannel->offermsg.offer.if_instance);
+		return;
+	}
 
 	init_vp_index(newchannel, dev_type);
 
@@ -566,6 +596,8 @@ static void vmbus_process_offer(struct vmbus_channel *newchannel)
 	bool fnew = true;
 
 	mutex_lock(&vmbus_connection.channel_mutex);
+
+	printk(KERN_ERR "%s: newchannel if_type %pUl if_instance %pUl\n", __func__, &newchannel->offermsg.offer.if_type, &newchannel->offermsg.offer.if_instance);
 
 	/*
 	 * Now that we have acquired the channel_mutex,

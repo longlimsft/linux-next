@@ -709,6 +709,7 @@ enum vmbus_device_type {
 	HV_FCOPY,
 	HV_BACKUP,
 	HV_DM,
+	HV_RIMBAUD,
 	HV_UNKNOWN,
 };
 
@@ -1004,6 +1005,17 @@ struct vmbus_channel_packet_page_buffer {
 	struct hv_page_buffer range[MAX_PAGE_BUFFER_COUNT];
 } __packed;
 
+struct vmbus_channel_packet_page_buffer_array {
+	u16 type;
+	u16 dataoffset8;
+	u16 length8;
+	u16 flags;
+	u64 transactionid;
+	u32 reserved;
+	u32 rangecount;
+	struct hv_page_buffer range[];
+} __packed;
+
 /* The format must be the same as struct vmdata_gpa_direct */
 struct vmbus_channel_packet_multipage_buffer {
 	u16 type;
@@ -1052,6 +1064,13 @@ extern int vmbus_sendpacket_pagebuffer(struct vmbus_channel *channel,
 					    void *buffer,
 					    u32 bufferlen,
 					    u64 requestid);
+
+extern int vmbus_sendpacket_pagebuffer_desc(struct vmbus_channel *channel,
+			struct vmbus_channel_packet_page_buffer_array *desc,
+			u32 desc_size,
+			void *buffer,
+			u32 bufferlen,
+			u64 requestid);
 
 extern int vmbus_sendpacket_mpb_desc(struct vmbus_channel *channel,
 				     struct vmbus_packet_mpb_array *mpb,
@@ -1213,6 +1232,14 @@ void vmbus_free_mmio(resource_size_t start, resource_size_t size);
 #define HV_SCSI_GUID \
 	.guid = UUID_LE(0xba6163d9, 0x04a1, 0x4d29, 0xb6, 0x05, \
 			0x72, 0xe2, 0xff, 0xb1, 0xdc, 0x7f)
+
+/*
+ * Rimbaud GUID
+ * {0590b792-db64-45cc-81db-b8d70c577c9e}
+ */
+#define HV_RIMBAUD_GUID \
+	.guid = GUID_INIT(0x0590b792, 0xdb64, 0x45cc, 0x81, 0xdb, \
+			  0xb8, 0xd7, 0x0c, 0x57, 0x7c, 0x9e)
 
 /*
  * Shutdown GUID
