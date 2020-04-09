@@ -260,6 +260,7 @@ int vmbus_open(struct vmbus_channel *newchannel,
 
 	err = __vmbus_open(newchannel, userdata, userdatalen,
 			   onchannelcallback, context);
+	printk(KERN_ERR "err %d\n", err);
 	if (err)
 		vmbus_free_ring(newchannel);
 
@@ -685,6 +686,9 @@ int vmbus_disconnect_ring(struct vmbus_channel *channel)
 	if (channel->primary_channel != NULL)
 		return -EINVAL;
 
+	printk(KERN_ERR "check %s\n", __func__);
+	dump_stack();
+
 	list_for_each_entry_safe(cur_channel, tmp, &channel->sc_list, sc_list) {
 		if (cur_channel->rescind)
 			wait_for_completion(&cur_channel->rescind_event);
@@ -823,6 +827,43 @@ int vmbus_sendpacket_pagebuffer(struct vmbus_channel *channel,
 	return hv_ringbuffer_write(channel, bufferlist, 3);
 }
 EXPORT_SYMBOL_GPL(vmbus_sendpacket_pagebuffer);
+
+int vmbus_sendpacket_pagebuffer_desc(struct vmbus_channel *channel,
+			struct vmbus_channel_packet_page_buffer_array *desc,
+			u32 desc_size,
+			void *buffer, u32 bufferlen, u64 requestid)
+{
+	u32 packetlen;
+	u32 packetlen_aligned;
+	struct kvec bufferlist[3];
+	u64 aligned_data = 0;
+
+	/*
+	 * Adjust the size down since vmbus_channel_packet_page_buffer is the
+	 * largest size we support
+	 */
+	packetlen = desc_size + bufferlen;
+	packetlen_aligned = ALIGN(packetlen, sizeof(u64));
+
+	/* Setup the descriptor */
+	desc->type = VM_PKT_DATA_USING_GPA_DIRECT;
+	desc->flags = VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED;
+	desc->dataoffset8 = desc_size >> 3; /* in 8-bytes granularity */
+	desc->length8 = (u16)(packetlen_aligned >> 3);
+	desc->transactionid = requestid;
+	desc->reserved = 0;
+//	desc.rangecount = pagecount; // set by the caller
+
+	bufferlist[0].iov_base = &desc;
+	bufferlist[0].iov_len = desc_size;
+	bufferlist[1].iov_base = buffer;
+	bufferlist[1].iov_len = bufferlen;
+	bufferlist[2].iov_base = &aligned_data;
+	bufferlist[2].iov_len = (packetlen_aligned - packetlen);
+
+	return hv_ringbuffer_write(channel, bufferlist, 3);
+}
+EXPORT_SYMBOL_GPL(vmbus_sendpacket_pagebuffer_desc);
 
 /*
  * vmbus_sendpacket_multipagebuffer - Send a multi-page buffer packet
