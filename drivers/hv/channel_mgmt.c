@@ -122,6 +122,12 @@ static const struct vmbus_device vmbus_devs[] = {
 	  .perf_device = false,
 	},
 
+	/* Rimbaud */
+	{ .dev_type = HV_RIMBAUD,
+	  HV_RIMBAUD_GUID,
+	  .perf_device = true,
+	},
+
 	/* Unknown GUID */
 	{ .dev_type = HV_UNKNOWN,
 	  .perf_device = false,
