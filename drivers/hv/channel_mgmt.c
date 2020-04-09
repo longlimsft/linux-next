@@ -26,6 +26,15 @@
 
 static void init_vp_index(struct vmbus_channel *channel);
 
+static const guid_t vpci_ignore_instances[] = {
+	/*
+	 * Rimbaud instance ID in VPCI introduced by FlexIOV
+	 * {d4573da2-2caa-4711-a8f9-bbabf4ee9685}
+	 */
+	GUID_INIT(0xd4573da2, 0x2caa, 0x4711, 0xa8, 0xf9, \
+                          0xbb, 0xab, 0xf4, 0xee, 0x96, 0x85),
+};
+
 const struct vmbus_device vmbus_devs[] = {
 	/* IDE */
 	{ .dev_type = HV_IDE,
@@ -121,6 +130,12 @@ const struct vmbus_device vmbus_devs[] = {
 	{ .dev_type = HV_DM,
 	  HV_DM_GUID,
 	  .perf_device = false,
+	},
+
+	/* Rimbaud */
+	{ .dev_type = HV_RIMBAUD,
+	  HV_RIMBAUD_GUID,
+	  .perf_device = true,
 	},
 
 	/* Unknown GUID */
@@ -455,6 +470,16 @@ void vmbus_free_channels(void)
 
 		vmbus_device_unregister(channel->device_obj);
 	}
+}
+
+static bool ignore_pcie_device(struct vmbus_channel *channel)
+{
+	int i;
+	for (i = 0; i < ARRAY_SIZE(vpci_ignore_instances); i++)
+		if (guid_equal(&vpci_ignore_instances[i],
+			       &channel->offermsg.offer.if_instance))
+			return true;
+	return false;
 }
 
 /* Note: the function can run concurrently for primary/sub channels. */
