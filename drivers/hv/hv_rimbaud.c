@@ -105,9 +105,27 @@ static const struct hv_vmbus_device_id id_table[] = {
 	{ },
 };
 
-static void rimbaud_on_channel_callback(void *context)
+static void rimbaud_on_response(struct hv_device *device)
 {
 
+}
+
+static void rimbaud_on_channel_callback(void *context)
+{
+	struct vmbus_channel *channel = (struct vmbus_channel *)context;
+	const struct vmpacket_descriptor *desc;
+	struct hv_device *device = channel->device_obj;
+
+	foreach_vmbus_pkt(desc, channel) {
+		void *packet = hv_pkt_data(desc);
+//		struct rimbaud_request *request;
+
+//		request = (struct storvsc_cmd_request *)
+//			((unsigned long)desc->trans_id);
+
+//		storvsc_on_receive(stor_device, packet, request);
+		rimbaud_on_response(device);
+	}
 }
 
 int rimbaud_channel_init(struct hv_device *device)
