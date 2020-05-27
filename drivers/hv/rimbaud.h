@@ -1,3 +1,6 @@
+#ifndef _RIMBAUD_H
+#define _RIMBAUD_H
+
 #include <linux/hyperv.h>
 #include <linux/cdev.h>
 #include <linux/hashtable.h>
@@ -87,8 +90,9 @@ struct rimbaud_get_blob_request {
 	union {
 		u32	all_flags;
 		struct {
-			u8	guest_compress : 1;
-			u8	guest_encrypt : 1;
+			u32	guest_compress : 1;
+			u32	guest_encrypt : 1;
+			u32	reserved : 30;
 		};
 	};
 
@@ -154,106 +158,107 @@ struct blob_handle_hash_list {
  * Interfaces for VSC - user-mode client library
  */
 struct rimbaud_client_openblob_request {
-	u64 response_addr;
-	u32 timeout;
+	__aligned_u64 response_addr;
+	__u32 timeout;
 	guid_t transaction_id;
 	
-	u32 blob_name_offset; 
-	u32 blob_name_length;
+	__u32 blob_name_offset; 
+	__u32 blob_name_length;
 
-	u32 session_token_offset;
-	u32 session_token_length;
+	__u32 session_token_offset;
+	__u32 session_token_length;
 };
 
 struct rimbaud_client_openblob_response {
-	u32 status;
-	u32 blob_handle;
+	__u32 status;
+	__u32 blob_handle;
 };
 
 struct rimbaud_client_closeblob_request {
-	u64 response_addr;
-	u32 blob_handle;
-	u32 timeout;
+	__aligned_u64 response_addr;
+	__u32 blob_handle;
+	__u32 timeout;
 	guid_t transaction_id;
 };
 
 struct rimbaud_client_closeblob_response {
-	u32 status;
+	__u32 status;
 };
 
 struct rimbaud_client_metadata_cache_hint_request {
-	u64 response_addr;
-	u32 blob_handle;
-	u32 timeout;
+	__aligned_u64 response_addr;
+	__u32 blob_handle;
+	__u32 timeout;
 	guid_t transaction_id;
-	u64 offset;
-	u64 length;
+	__aligned_u64 offset;
+	__aligned_u64 length;
 
-	u32 session_token_offset;
-	u32 session_token_length;
+	__u32 session_token_offset;
+	__u32 session_token_length;
 };
 
 struct rimbaud_client_metadata_cache_hint_response {
-	u32 status;
+	__u32 status;
 };
 
 struct rimbaud_client_getblob_request {
-	u32 blob_handle;
-	u32 timeout;
+	__u32 blob_handle;
+	__u32 timeout;
 	guid_t transaction_id;
-	u64 offset;
-	u32 length;
+	__aligned_u64 offset;
+	__u32 length;
 
 	union {
-		u32 flag;
+		__u32 flag;
 		struct {
-			bool guest_compress : 1;
-			bool guest_encrypt : 1;
+			__u32 guest_compress : 1;
+			__u32 guest_encrypt : 1;
+			__u32 reserved : 30;
 		};
 	};
 
-	void* user_buffer; 
-	u32 user_buffer_len;
+	__aligned_u64 user_buffer;
+	__u32 user_buffer_len;
 
-	u32 session_token_offset;
-	u32 session_token_length;
+	__u32 session_token_offset;
+	__u32 session_token_length;
 }; 
 
 struct rimbaud_client_getblob_response {
-	u32 status;
+	__u32 status;
 	guid_t transaction_id;
-	u32 bytes_written;
+	__u32 bytes_written;
 
 	/* Starting offset into the blob for returned data.
 	 * When reading compressed append blocks, the response's BlobOffset
 	 * may differ from the request's Offset, depending on the append block
 	 * boundary.
 	 */
-	u64 blob_offset;
+	__aligned_u64 blob_offset;
 };
 
 struct rimbaud_client_getblob_responses {
-	u32 returned_responses;
+	__u32 returned_responses;
 	struct rimbaud_client_getblob_response responses[];
 };
 
 struct rimbaud_client_getblob_query {
-	u64 response_addr;
-	u32 blob_handle;
-	u32 num_responses; // the size of responses that response_addr can hold
+	__aligned_u64 response_addr;
+	__u32 blob_handle;
+	__u32 num_responses; // the size of responses that response_addr can hold
 };
 
 struct rimbaud_client_update_session_request {
-	u64 response_addr;
-	u32 blob_handle;
-	u32 timeout;
+	__aligned_u64 response_addr;
+	__u32 blob_handle;
+	__u32 timeout;
 	guid_t transaction_id;
-	u32 session_token_offset;
-	u32 session_token_length;
+	__u32 session_token_offset;
+	__u32 session_token_length;
 };
 
 struct rimbaud_client_update_session_response {
-	u32 status;
+	__u32 status;
 };
 
 enum rimbaud_client_command {
@@ -265,9 +270,15 @@ enum rimbaud_client_command {
 	CLIENT_GET_BLOB_QUERY	= 5,
 };
 
-struct rimbaud_client_request {
+struct rimbaud_client_request_hdr {
+	__u32 command;		// enum rimbaud_client_command
+	__u16 in_bytes;		// total bytes of this request, not including this hdr
+	__u16 out_bytes;	// total bytes of response in response_addr
+	__aligned_u64 response_addr;	// the response address for VSC to return data
+};
 
-	u32 command;	// enum rimbaud_client_command
+struct rimbaud_client_request {
+	struct rimbaud_client_request_hdr hdr;
 	union {
 		struct rimbaud_client_openblob_request openblob;
 		struct rimbaud_client_closeblob_request closeblob;
@@ -278,4 +289,4 @@ struct rimbaud_client_request {
 	};
 };
 
-int rimbaud_client_init(struct rimbaud_device *dev);
+#endif /* define _RIMBAUD_H */

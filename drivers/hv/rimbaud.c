@@ -155,7 +155,9 @@ static int rimbaud_fop_release(struct inode *inode, struct file *file)
 }
 
 static int process_client_get_blob_query(
-	const char __user *buf, size_t count, struct rimbaud_device *dev)
+	const char __user *buf, size_t count,
+	u16 out_bytes, void __user * response_addr,
+	struct rimbaud_device *dev)
 {
 	struct rimbaud_client_getblob_query queryblob;
 	unsigned long flags;
@@ -166,11 +168,8 @@ static int process_client_get_blob_query(
 	int num_returned = 0;
 	struct rimbaud_client_getblob_responses *response;
 	struct rimbaud_client_getblob_response *cur_response;
-	struct rimbaud_client_getblob_responses __user *user_response;
 	int user_response_size, i;
 	int rc;
-
-	rimbaud_dbg("count=%lu\n", count);
 
 	if (count < sizeof(queryblob))
 		return -EINVAL;
@@ -179,21 +178,15 @@ static int process_client_get_blob_query(
 	if (rc)
 		return -EPERM;
 
-	if (queryblob.num_responses *
-		sizeof(struct rimbaud_client_getblob_response) +
-		sizeof(queryblob) < count) {
-		rimbaud_err("wrong size num_responses %d count %lu\n",
-			queryblob.num_responses, count);
-		return -EINVAL;
-	}
-
-	// check if we can write the response back to user
-	user_response = u64_to_user_ptr(queryblob.response_addr);
+	// validate response buffer size
 	user_response_size = sizeof(struct rimbaud_client_getblob_responses) +
 				sizeof(struct rimbaud_client_getblob_response) *
 				queryblob.num_responses;
-	if (!access_ok(user_response, user_response_size))
-		return -EPERM;
+	if (out_bytes != user_response_size) {
+		rimbaud_err("out_bytes %u user_response_size %d mismatch\n",
+			out_bytes, user_response_size);
+		return -EINVAL;
+	}
 
 	// allocate the response in kernel to be copied to user mode
 	response = kmalloc(user_response_size, GFP_KERNEL);
@@ -269,7 +262,7 @@ again:
 	rimbaud_dbg("returning %d responses to user-mode\n", num_returned);
 	response->returned_responses = num_returned;
 
-	rc = copy_to_user(user_response, response,
+	rc = copy_to_user(response_addr, response,
 		sizeof(struct rimbaud_client_getblob_responses) +
 		sizeof(struct rimbaud_client_getblob_response) * num_returned);
 	if (rc)
@@ -282,7 +275,8 @@ again:
 }
 
 static int process_client_get_blob(
-	const char __user *buf, size_t count, struct rimbaud_device *dev)
+	const char __user *buf, size_t count,
+	struct rimbaud_device *dev)
 {
 	struct rimbaud_client_getblob_request readblob;
 	struct rimbaud_request *request = NULL;
@@ -298,8 +292,7 @@ static int process_client_get_blob(
 	bool found = false, closing;
 	unsigned long flags;
 	struct blob_handle_hash_list *hlist;
-
-	rimbaud_dbg("count=%lu\n", count);
+	void __user * user_buffer;
 
 	if (count < sizeof(readblob))
 		return -EINVAL;
@@ -335,9 +328,13 @@ static int process_client_get_blob(
 		return -EINVAL;
 	}
 
-	// pin the user pages from readblob.user_buffer
-	rc = import_single_range(WRITE,
-		readblob.user_buffer, readblob.user_buffer_len, &iov, &iter);
+	/*
+	 * pin the user pages from readblob.user_buffer
+	 * import_single_range() checks for access permissions
+	 */
+	user_buffer = (void __user *) readblob.user_buffer;
+	rc = import_single_range(
+		WRITE, user_buffer, readblob.user_buffer_len, &iov, &iter);
 	if (rc) {
 		rimbaud_err("user buffer access error %d\n", rc);
 		return rc;
@@ -423,6 +420,7 @@ static int process_client_get_blob(
 	request->pagevec = pagevec;
 	request->num_pages = num_pages;
 
+	atomic_inc(&dev->vsp_pending);
 	// send message to VSP
 	rc = vmbus_sendpacket_mpb_desc(dev->device.channel,
 		payload, payload_sz,
@@ -433,6 +431,7 @@ static int process_client_get_blob(
 	kfree(get_blob_vsp);
 
 	if (!rc) {
+		atomic_dec(&dev->vsp_pending);
 		rimbaud_err("vmbus_sendpacket_mpb_desc rc=%d\n", rc);
 		return rc;
 	}
@@ -455,22 +454,21 @@ alloc_failure:
 }
 
 static int process_client_metadata_hint(
-	const char __user *buf, size_t count, struct rimbaud_device *dev)
+	const char __user *buf, size_t count,
+	u16 out_bytes, void __user * response_addr,
+	struct rimbaud_device *dev)
 {
 	struct rimbaud_client_metadata_cache_hint_request metadata_hint;
 	struct rimbaud_metadata_hint_request *metadata_hint_vsp = NULL;
 	u32 token_len;
 	struct rimbaud_request request;
 	struct rimbaud_packet_response vsp_response;
-	struct rimbaud_client_metadata_cache_hint_response __user *user_response;
 	struct rimbaud_client_metadata_cache_hint_response response;
 	int rc, found = 0, closing = 0;
 	struct blob_handle_hash_list *hlist;
 	unsigned long flags;
 
-	rimbaud_dbg("count=%lu\n", count);
-
-	if (count < sizeof(metadata_hint))
+	if (count < sizeof(metadata_hint) || out_bytes != sizeof(response))
 		return -EINVAL;
 
 	rc = copy_from_user(&metadata_hint, buf, sizeof(metadata_hint));
@@ -478,12 +476,6 @@ static int process_client_metadata_hint(
 		return -EPERM;
 
 	token_len = metadata_hint.session_token_length;
-
-	user_response = u64_to_user_ptr(metadata_hint.response_addr);
-	// check if we can write the response back to user
-	if (!access_ok(user_response,
-		sizeof(struct rimbaud_client_metadata_cache_hint_response)))
-		return -EPERM;
 
 	// validate token in the buffer
 	if (metadata_hint.session_token_offset + token_len > count) {
@@ -568,8 +560,7 @@ static int process_client_metadata_hint(
 
 	// write the response to user buf
 	response.status = vsp_response.status;
-	rc = copy_to_user(user_response, &response,
-		sizeof(struct rimbaud_client_metadata_cache_hint_response));
+	rc = copy_to_user(response_addr, &response, sizeof(response));
 
 	if (rc)
 		rc = -EPERM;
@@ -582,33 +573,25 @@ fail:
 }
 
 static int process_client_close_blob(
-	const char __user *buf, size_t count, struct rimbaud_device *dev)
+	const char __user *buf, size_t count,
+	u16 out_bytes, void __user * response_addr,
+	struct rimbaud_device *dev)
 {
 	struct rimbaud_client_closeblob_request closeblob;
 	struct rimbaud_packet_request close_blob_vsp;
 	struct rimbaud_request request, *r, *n;
 	struct rimbaud_packet_response vsp_response;
-	struct rimbaud_client_closeblob_response __user *user_response;
 	struct rimbaud_client_closeblob_response response;
 	int i, rc, found = 0;
 	struct blob_handle_hash_list *hlist;
 	unsigned long flags;
 
-	rimbaud_dbg("count=%lu\n", count);
-	
-	if (count < sizeof(closeblob))
+	if (count < sizeof(closeblob) || out_bytes != sizeof(response))
 		return -EINVAL;
 
 	rc = copy_from_user(&closeblob, buf, sizeof(closeblob));
 	if (rc)
 		return -EPERM;
-
-	user_response = u64_to_user_ptr(closeblob.response_addr);
-	// check if we can write the response back to user
-	if (!access_ok(user_response,
-		sizeof(struct rimbaud_client_closeblob_response))) {
-		return -EPERM;
-	}
 
 	// find this blob handle and mark it as closing
 	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
@@ -665,8 +648,7 @@ static int process_client_close_blob(
 
 	//write the blob handle back to user buf
 	response.status = vsp_response.status;
-	rc = copy_to_user(user_response, &response,
-		sizeof(struct rimbaud_client_closeblob_response));
+	rc = copy_to_user(response_addr, &response, sizeof(response));
 
 	if (rc)
 		rc = -EPERM;
@@ -747,7 +729,9 @@ static int process_client_close_blob(
 }
 
 static int process_client_open_blob(
-	const char __user *buf, size_t count, struct rimbaud_device *dev)
+	const char __user *buf, size_t count,
+	u16 out_bytes, void __user * response_addr,
+	struct rimbaud_device *dev)
 {
 	struct rimbaud_client_openblob_request openblob;
 	u32 token_len, name_len;
@@ -755,14 +739,11 @@ static int process_client_open_blob(
 	struct rimbaud_request request;
 	struct rimbaud_open_blob_response vsp_response;
 	int rc;
-	struct rimbaud_client_openblob_response __user *user_response;
 	struct rimbaud_client_openblob_response response;
 	struct blob_handle_hash_list *hash_list;
 	unsigned long flags;
 
-	rimbaud_dbg("count=%lu\n", count);
-
-	if (count < sizeof(openblob))
+	if (count < sizeof(openblob) || out_bytes != sizeof(response))
 		return -EINVAL;
 
 	rc = copy_from_user(&openblob, buf, sizeof(openblob));
@@ -771,13 +752,6 @@ static int process_client_open_blob(
 
 	token_len = openblob.session_token_length;
 	name_len = openblob.blob_name_length;
-
-	user_response = u64_to_user_ptr(openblob.response_addr);
-	// check if we can write the response back to user
-	if (!access_ok(user_response,
-		sizeof(struct rimbaud_client_openblob_response))) {
-		return -EPERM;
-	}
 
 	rimbaud_dbg("openblob timeout %d transaction_id %pUl offset %d "
 		"length %d token offset %d length %d\n",
@@ -883,8 +857,7 @@ static int process_client_open_blob(
 	// write the response to user buf
 	response.status = vsp_response.header.status;
 	response.blob_handle = vsp_response.blob_handle;
-	rc = copy_to_user(user_response, &response,
-		sizeof(struct rimbaud_client_openblob_response));
+	rc = copy_to_user(response_addr, &response, sizeof(response));
 	if (rc)
 		rc = -EPERM;
 
@@ -905,9 +878,11 @@ static ssize_t rimbaud_fop_write(struct file *file, const char __user * buf,
 {
 	char my_buf[200]; // just for testing, to be removed
 	char *write_buf = (void *) buf; //just for testing, to be removed
-	u32 command;
+//	u32 command;
 	int rc;
 	struct rimbaud_device *dev = file->private_data;
+	struct rimbaud_client_request_hdr hdr;
+	void __user * response_addr = NULL;
 
 	rimbaud_dbg("count %ld *pos %lld\n", count, *pos);
 
@@ -921,46 +896,78 @@ static ssize_t rimbaud_fop_write(struct file *file, const char __user * buf,
 		return -EACCES;
 	}
 
-	if (count < sizeof(command)) {
-		rimbaud_err("got a command size %ld\n", count);
+	if (count < sizeof(hdr)) {
+		rimbaud_err("got a command size %ld < hdr size\n", count);
 		return -EINVAL;
 	}
 
-	rc = copy_from_user(&command, buf, sizeof(command));
+	rc = copy_from_user(&hdr, buf, sizeof(hdr));
 	if (rc)
 		return -EPERM;
+	rimbaud_dbg("got command=%d\n", hdr.command);
 
-	rimbaud_dbg("got command=%d\n", command);
+	if (hdr.in_bytes != count - sizeof(hdr)) {
+		rimbaud_err("hdr.in_bytes=%u count=%ld mismatch\n",
+			hdr.in_bytes, count);
+		return -EINVAL;
+	}
 
-	switch(command) {
+	if (hdr.out_bytes) {
+		response_addr = u64_to_user_ptr(hdr.response_addr);
+
+		// check if we can write the response back to user
+		if (!access_ok(response_addr, hdr.out_bytes)) {
+			rimbaud_err("can't write response %u bytes\n",
+				hdr.out_bytes);
+			return -EPERM;
+		}
+	}
+
+	rimbaud_dbg("calling subcommand count=%lu in_bytes=%u out_bytes=%u\n",
+		count - sizeof(hdr), hdr.in_bytes, hdr.out_bytes);
+
+	switch(hdr.command) {
 		case CLIENT_OPEN_BLOB:
 			rc = process_client_open_blob(
-				buf + sizeof(command),
-				count - sizeof(command), dev);
+				buf + sizeof(hdr),
+				count - sizeof(hdr),
+				hdr.out_bytes,
+				response_addr,
+				dev);
 			break;
 
 		case CLIENT_CLOSE_BLOB:
 			rc = process_client_close_blob(
-				buf + sizeof(command),
-				count - sizeof(command), dev);
+				buf + sizeof(hdr),
+				count - sizeof(hdr),
+				hdr.out_bytes,
+				response_addr,
+				dev);
 			break;
 
 		case CLIENT_GET_BLOB:
 			rc = process_client_get_blob(
-				buf + sizeof(command),
-				count - sizeof(command), dev);
+				buf + sizeof(hdr),
+				count - sizeof(hdr),
+				dev);
 			break;
 
 		case CLIENT_GET_BLOB_QUERY:
 			rc = process_client_get_blob_query(
-				buf + sizeof(command),
-				count - sizeof(command), dev);
+				buf + sizeof(hdr),
+				count - sizeof(hdr),
+				hdr.out_bytes,
+				response_addr,
+				dev);
 			break;
 
 		case CLIENT_METADATA_HINT:
 			rc = process_client_metadata_hint(
-				buf + sizeof(command),
-				count - sizeof(command), dev);
+				buf + sizeof(hdr),
+				count - sizeof(hdr),
+				hdr.out_bytes,
+				response_addr,
+				dev);
 			break;
 
 		default:
