@@ -158,7 +158,6 @@ struct blob_handle_hash_list {
  * Interfaces for VSC - user-mode client library
  */
 struct rimbaud_client_openblob_request {
-	__aligned_u64 response_addr;
 	__u32 timeout;
 	guid_t transaction_id;
 	
@@ -175,7 +174,6 @@ struct rimbaud_client_openblob_response {
 };
 
 struct rimbaud_client_closeblob_request {
-	__aligned_u64 response_addr;
 	__u32 blob_handle;
 	__u32 timeout;
 	guid_t transaction_id;
@@ -186,7 +184,6 @@ struct rimbaud_client_closeblob_response {
 };
 
 struct rimbaud_client_metadata_cache_hint_request {
-	__aligned_u64 response_addr;
 	__u32 blob_handle;
 	__u32 timeout;
 	guid_t transaction_id;
@@ -243,13 +240,11 @@ struct rimbaud_client_getblob_responses {
 };
 
 struct rimbaud_client_getblob_query {
-	__aligned_u64 response_addr;
 	__u32 blob_handle;
 	__u32 num_responses; // the size of responses that response_addr can hold
 };
 
 struct rimbaud_client_update_session_request {
-	__aligned_u64 response_addr;
 	__u32 blob_handle;
 	__u32 timeout;
 	guid_t transaction_id;
