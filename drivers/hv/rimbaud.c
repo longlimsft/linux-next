@@ -41,6 +41,25 @@ do {	\
 #define rimbaud_warn(fmt, args...) rimbaud_log(WAN, fmt, ##args)
 #define rimbaud_err(fmt, args...) rimbaud_log(ERR, fmt, ##args)
 
+/*
+ * blob_add_vsp_ref(), blob_remove_vsp_ref()
+ * Keep track of VSP request pending acitivies on the blob handle. To maximize
+ * parallelism, the blob is not locked while doing VSP request. Those functions
+ * are used to prevent sending more VSP requests on this blob after CLOSE_BLOB
+ * on this blob is sent to VSP.
+ */
+static void blob_add_vsp_ref(struct blob_handle_hash_list *hlist)
+{
+	hlist->vsp_request_pending++;
+}
+
+static void blob_remove_vsp_ref(struct blob_handle_hash_list *hlist)
+{
+	hlist->vsp_request_pending--;
+	if (!hlist->vsp_request_pending)
+		wake_up(&hlist->wait_close);
+}
+
 static void process_vsp_get_blob_response(
 	struct hv_device *device, struct rimbaud_request *request)
 {
@@ -63,6 +82,7 @@ static void process_vsp_get_blob_response(
 		list_add_tail(&request->list, &hlist->head);
 		rimbaud_dbg("found blob handle %d for response UUID %pUl\n",
 			request->handle, &request->transaction_id);
+		virt_wmb();
 		wake_up(&hlist->wait_response);
 	}
 	else {
@@ -131,17 +151,18 @@ static void rimbaud_on_channel_callback(void *context)
 			wake_up(&dev->wait_remove);
 	}
 }
-
+/*
 static char *rimbaud_devnode(struct device *dev, umode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "rimbaud/%s", dev_name(dev));
 }
-
+*/
 static int rimbaud_fop_open(struct inode *inode, struct file *file)
 {
-	struct rimbaud_device *dev =
-		container_of(inode->i_cdev, struct rimbaud_device, cdev);
-	file->private_data = dev;
+//	struct rimbaud_device *dev =
+//		container_of(inode->i_cdev, struct rimbaud_device, cdev);
+//	file->private_data = dev;
+	file->private_data = &rimbaud_dev;
 	rimbaud_dbg("checkpoint\n");
 	return 0;
 }
@@ -162,7 +183,7 @@ static int process_client_get_blob_query(
 	struct rimbaud_client_getblob_query queryblob;
 	unsigned long flags;
 	struct blob_handle_hash_list *hlist;
-	bool found = false, closing;
+	bool found = false;
 	struct rimbaud_request *request, *n;
 	struct rimbaud_get_blob_response *vsp_response;
 	int num_returned = 0;
@@ -195,24 +216,23 @@ static int process_client_get_blob_query(
 
 	cur_response = &response->responses[0];
 
-again:
 	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+again:
 	// find this handle in the hash table
 	hash_for_each_possible(
 		dev->read_blob_hash, hlist, node, queryblob.blob_handle) {
 		if (hlist->blob_handle == queryblob.blob_handle) {
-			found = true;
-			hlist->wait_pending++;
-			closing = READ_ONCE(hlist->closing);
+			if (!hlist->closing) {
+				found = true;
+				hlist->query_pending++;
+			}
 			break;
 		}
 	}
 
-	if (!found || closing) {
-		rimbaud_err("blob handle %d found %d closing %d\n",
-			queryblob.blob_handle, found, closing);
-		hlist->wait_pending--;
-		wake_up(&hlist->wait_close);
+	if (!found) {
+		rimbaud_err("blob handle %d not found or it's closing\n",
+			queryblob.blob_handle);
 		spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 		kfree(response);
 		return -EINVAL;
@@ -224,6 +244,12 @@ again:
 		//place on wait queue and try agin
 		wait_event(hlist->wait_response,
 			READ_ONCE(hlist->closing) || !list_empty(&hlist->head));
+
+		spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+
+		hlist->query_pending--;
+		if (!hlist->query_pending)
+			wake_up(&hlist->wait_close);
 
 		goto again;
 	}
@@ -254,8 +280,9 @@ again:
 		}
 	}
 
-	hlist->wait_pending--;
-	wake_up(&hlist->wait_close);
+	hlist->query_pending--;
+	if (!hlist->query_pending)
+		wake_up(&hlist->wait_close);
 	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 
 	// copy the results to user
@@ -289,7 +316,7 @@ static int process_client_get_blob(
 	size_t result, start;
 	int i, num_pages, payload_sz;
 	struct vmbus_packet_mpb_array *payload = NULL;
-	bool found = false, closing;
+	bool found = false;
 	unsigned long flags;
 	struct blob_handle_hash_list *hlist;
 	void __user * user_buffer;
@@ -315,16 +342,18 @@ static int process_client_get_blob(
 	hash_for_each_possible(
 		dev->read_blob_hash, hlist, node, readblob.blob_handle) {
 		if (hlist->blob_handle == readblob.blob_handle) {
-			closing = READ_ONCE(hlist->closing);
-			found = true;
+			if (!hlist->closing) {
+				found = true;
+				blob_add_vsp_ref(hlist);
+			}
 			break;
 		}
 	}
 	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 
-	if (!found || closing) {
-		rimbaud_err("blob handle %d found %d closing %d\n",
-			readblob.blob_handle, found, closing);
+	if (!found) {
+		rimbaud_err("blob handle %d not found or being closed\n",
+			readblob.blob_handle);
 		return -EINVAL;
 	}
 
@@ -351,7 +380,7 @@ static int process_client_get_blob(
 	num_pages = (result + start + PAGE_SIZE - 1) / PAGE_SIZE;
 	payload_sz = num_pages * sizeof(u64) +
 			sizeof(struct vmbus_packet_mpb_array);
-	payload = kzalloc(payload_sz, GFP_ATOMIC);
+	payload = kzalloc(payload_sz, GFP_KERNEL);
 	if (!payload) {
 		rc = -ENOMEM;
 		goto alloc_failure;
@@ -370,21 +399,20 @@ static int process_client_get_blob(
 	}
 
 	// prepare request message to VSP
-	get_blob_vsp = kmalloc(sizeof(*get_blob_vsp) + token_len, GFP_ATOMIC);
+	get_blob_vsp = kmalloc(sizeof(*get_blob_vsp) + token_len, GFP_KERNEL);
 	if (!get_blob_vsp) {
 		rc = -ENOMEM;
 		goto alloc_failure;
 	}
 
-	get_blob_vsp->header.length = sizeof(get_blob_vsp);
+	get_blob_vsp->header.length = sizeof(*get_blob_vsp);
 	get_blob_vsp->header.blob_handle = readblob.blob_handle;
 	get_blob_vsp->header.type = GET_BLOB;
 	get_blob_vsp->header.timeout = readblob.timeout;
 	get_blob_vsp->header.transaction_id = readblob.transaction_id;
 
 	// token starts at the end of packet header
-	get_blob_vsp->header.session_token_offset =
-		sizeof(struct rimbaud_get_blob_request);
+	get_blob_vsp->header.session_token_offset = sizeof(*get_blob_vsp);
 	get_blob_vsp->header.session_token_length = token_len;
 	rc = copy_from_user(
 		(char *) get_blob_vsp +
@@ -422,13 +450,18 @@ static int process_client_get_blob(
 
 	atomic_inc(&dev->vsp_pending);
 	// send message to VSP
-	rc = vmbus_sendpacket_mpb_desc(dev->device.channel,
+	rc = vmbus_sendpacket_mpb_desc(dev->device->channel,
 		payload, payload_sz,
 		get_blob_vsp,
 		get_blob_vsp->length,
 		(unsigned long) request);
 
 	kfree(get_blob_vsp);
+	kfree(payload);
+
+	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+	blob_remove_vsp_ref(hlist);
+	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 
 	if (!rc) {
 		atomic_dec(&dev->vsp_pending);
@@ -439,6 +472,11 @@ static int process_client_get_blob(
 	return 0;
 
 alloc_failure:
+
+	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+	blob_remove_vsp_ref(hlist);
+	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
+
 	for (i=0; i<num_pages; i++) {
 		put_page(pagevec[i]);
 	}
@@ -464,7 +502,8 @@ static int process_client_metadata_hint(
 	struct rimbaud_request request;
 	struct rimbaud_packet_response vsp_response;
 	struct rimbaud_client_metadata_cache_hint_response response;
-	int rc, found = 0, closing = 0;
+	int rc;
+	bool found = false;
 	struct blob_handle_hash_list *hlist;
 	unsigned long flags;
 
@@ -489,34 +528,39 @@ static int process_client_metadata_hint(
 	hash_for_each_possible(
 		dev->read_blob_hash, hlist, node, metadata_hint.blob_handle) {
 		if (hlist->blob_handle == metadata_hint.blob_handle) {
-			closing = READ_ONCE(hlist->closing);
-			found = true;
+			if (!hlist->closing) {
+				found = true;
+				blob_add_vsp_ref(hlist);
+			}
 			break;
 		}
 	}
 	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 
-	if (!found || closing) {
-		rimbaud_err("blob handle %d found=%d closing=%d\n",
-			metadata_hint.blob_handle, found, closing);
+	if (!found) {
+		rimbaud_err("blob handle %d not found or being closed\n",
+			metadata_hint.blob_handle);
 		return -EINVAL;
 	}
 
 	// prepare VSP message
 	metadata_hint_vsp = kmalloc(sizeof(*metadata_hint_vsp) + token_len,
 				GFP_KERNEL);
-	if (!metadata_hint_vsp)
-		return -ENOMEM;
+	if (!metadata_hint_vsp) {
+		rc = -ENOMEM;
+		goto fail;
+	}
 
 	metadata_hint_vsp->header.length =
 		sizeof(*metadata_hint_vsp) + token_len;
+	metadata_hint_vsp->header.blob_handle = metadata_hint.blob_handle;
 	metadata_hint_vsp->header.type = CLIENT_METADATA_HINT;
 	metadata_hint_vsp->header.timeout = metadata_hint.timeout;
 	metadata_hint_vsp->header.transaction_id = metadata_hint.transaction_id;
 
 	// token starts at the end of packet header
 	metadata_hint_vsp->header.session_token_offset =
-		sizeof(struct rimbaud_metadata_hint_request);
+		sizeof(*metadata_hint_vsp);
 	metadata_hint_vsp->header.session_token_length = token_len;
 
 	rc = copy_from_user(
@@ -535,7 +579,7 @@ static int process_client_metadata_hint(
 	init_completion(&request.wait_event);
 
 	atomic_inc(&dev->vsp_pending);
-	rc = vmbus_sendpacket(dev->device.channel,
+	rc = vmbus_sendpacket(dev->device->channel,
 		metadata_hint_vsp,
 		metadata_hint_vsp->header.length,
 		(unsigned long) &request,
@@ -543,6 +587,10 @@ static int process_client_metadata_hint(
 		VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED);
 
 	kfree(metadata_hint_vsp);
+
+	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+	blob_remove_vsp_ref(hlist);
+	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 
 	if (rc) {
 		atomic_dec(&dev->vsp_pending);
@@ -569,6 +617,11 @@ static int process_client_metadata_hint(
 
 fail:
 	kfree(metadata_hint_vsp);
+
+	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+	blob_remove_vsp_ref(hlist);
+	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
+
 	return rc;
 }
 
@@ -582,7 +635,8 @@ static int process_client_close_blob(
 	struct rimbaud_request request, *r, *n;
 	struct rimbaud_packet_response vsp_response;
 	struct rimbaud_client_closeblob_response response;
-	int i, rc, found = 0;
+	int i, rc;
+	bool found = false;
 	struct blob_handle_hash_list *hlist;
 	unsigned long flags;
 
@@ -598,17 +652,23 @@ static int process_client_close_blob(
 	hash_for_each_possible(
 		dev->read_blob_hash, hlist, node, closeblob.blob_handle) {
 		if (hlist->blob_handle == closeblob.blob_handle) {
-			WRITE_ONCE(hlist->closing, true);
-			found = true;
+			if (!hlist->closing) {
+				hlist->closing = true;
+				found = true;
+			}
 			break;
 		}
 	}
 	spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 
 	if (!found) {
-		rimbaud_err("can't find blob handle %d\n", closeblob.blob_handle);
+		rimbaud_err("can't find blob handle %d or it's being closed\n",
+			closeblob.blob_handle);
 		return -EINVAL;
 	}
+
+	// wait until there is no pending VSP requests on this blob
+	wait_event(hlist->wait_close, !READ_ONCE(hlist->vsp_request_pending));
 
 	// send a message to VSP and wait for result
 	close_blob_vsp.length = sizeof(close_blob_vsp);
@@ -624,7 +684,7 @@ static int process_client_close_blob(
 	init_completion(&request.wait_event);
 
 	atomic_inc(&dev->vsp_pending);
-	rc= vmbus_sendpacket(dev->device.channel,
+	rc= vmbus_sendpacket(dev->device->channel,
 		&close_blob_vsp,
 		close_blob_vsp.length,
 		(unsigned long) &request,
@@ -654,36 +714,26 @@ static int process_client_close_blob(
 		rc = -EPERM;
 
 	/*
-	 * a misbehaving user-mode may try to close the handle from
-	 * different processes, protect this by looking for the blob
-	 * handle again in protected context
-	 */
-	spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
-	hash_for_each_possible(
-		dev->read_blob_hash, hlist, node, closeblob.blob_handle)
-		if (hlist->blob_handle == closeblob.blob_handle) {
-			found = true;
-			break;
-		}
-
-	if (!found) {
-		rimbaud_warn("blob handle %d has been removed from another "
-			"context\n",
-			closeblob.blob_handle);
-		spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
-		return -ENOENT;
-	}
-
-	/*
 	 * regardless if we have successfully copied the result to user, 
 	 * the VSP has closed this handle, so marking it as closed
 	 */
 	if (!vsp_response.status) {
-		// remove this blob handle from hash table
-		hash_del(&hlist->node);
+
 		wake_up_all(&hlist->wait_response);
 
-		// discard all pending responses for this handle
+		/*
+		 * Wait until there is no client get_blob_query pending on
+		 * this blob. After this call, it's not possible to have
+		 * VSP pending or client pending activities on this blob,
+		 * it's safe to delete all its resources
+		 */
+		wait_event(hlist->wait_close, !READ_ONCE(hlist->query_pending));
+
+		/*
+		 * Remove this handle from hashtable and discard all pending
+		 * responses for this handle
+		 */
+		hash_del(&hlist->node);
 		list_for_each_entry_safe(r, n, &hlist->head, list) {
 			list_del(&r->list);
 			for (i = 0; i < r->num_pages; i++)
@@ -692,37 +742,12 @@ static int process_client_close_blob(
 			kfree(r->vsp_response_packet);
 			kfree(r);
 		}
-		spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
-
-		wait_event(hlist->wait_close, !READ_ONCE(hlist->wait_pending));
-
-		/*
-		 * all clients have exited loop for querying on this handle,
-		 * it's not possible for new clients entering query loop
-		 * since the blob handle is marked as "closing", we have safely
-		 * free it. to prevent a malicious user-mode OOPS kernel, do
-		 * a search again on the handle.
-		 */
-
-		spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
-		hash_for_each_possible(
-			dev->read_blob_hash, hlist, node, closeblob.blob_handle)
-			if (hlist->blob_handle == closeblob.blob_handle) {
-				found = true;
-				break;
-			}
-		if (found)
-			kfree(hlist);
-		else
-			rimbaud_warn("handle %d removed by another context "
-				"while being freed\n", closeblob.blob_handle);
-
-		spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
-
+		kfree(hlist);
 	} else {
-		spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 		rimbaud_err("vsp_response.status = %d\n", vsp_response.status);
-		WRITE_ONCE(hlist->closing, false);
+		spin_lock_irqsave(&dev->read_blob_hash_lock, flags);
+		hlist->closing = false;
+		spin_unlock_irqrestore(&dev->read_blob_hash_lock, flags);
 	}
 
 	return rc;
@@ -811,7 +836,7 @@ static int process_client_open_blob(
 	init_completion(&request.wait_event);
 
 	atomic_inc(&dev->vsp_pending);
-	rc= vmbus_sendpacket(dev->device.channel,
+	rc= vmbus_sendpacket(dev->device->channel,
 		open_blob_vsp,
 		open_blob_vsp->header.length,
 		(unsigned long) &request,
@@ -1005,24 +1030,46 @@ static const struct file_operations rimbaud_client_fops = {
 	.release = rimbaud_fop_release,
 };
 
+#define RIMBAUD_MINOR_DEV 100
+static struct miscdevice rimbaud_misc_device = {
+	RIMBAUD_MINOR_DEV,
+	"azure_blob",
+        &rimbaud_client_fops,
+};
+
+
 static void rimbaud_remove_device(struct rimbaud_device *dev)
 {
 	WRITE_ONCE(dev->removing, true);
 
+	misc_deregister(&rimbaud_misc_device);
+#if 0
 	device_destroy(dev->class, dev->devno);
 	cdev_del(&dev->cdev);
 	class_destroy(dev->class);
 	unregister_chrdev_region(dev->devno, 1);
+#endif
 
 	// at this point, we won't get any requests from user-mode
 }
 
 static int rimbaud_create_device(struct rimbaud_device *dev)
 {
-	struct device *char_dev;
-	dev_t devno;
+//	struct device *char_dev;
+//	dev_t devno;
 	int rc;
 
+	hash_init(dev->read_blob_hash);
+	init_waitqueue_head(&dev->wait_remove);
+	atomic_set(&dev->vsp_pending, 0);
+
+	rc = misc_register(&rimbaud_misc_device);
+	if (rc)
+		rimbaud_err("misc_register failed rc %d\n", rc);
+
+	return rc;
+
+#if 0
 	rc = alloc_chrdev_region(&devno, 0, 1, "rimbaud");
 	if (unlikely(rc)) {
 		rimbaud_err("alloc_chrdev_region rc=%d\n", rc);
@@ -1055,11 +1102,6 @@ static int rimbaud_create_device(struct rimbaud_device *dev)
 	}
 	dev->chardev = char_dev;
 
-	hash_init(dev->read_blob_hash);
-
-	init_waitqueue_head(&dev->wait_remove);
-	atomic_set(&dev->vsp_pending, 0);
-
 	return 0;
 
 device_create_fail:
@@ -1072,6 +1114,7 @@ class_create_fail:
 	unregister_chrdev_region(devno, 1);
 
 	return rc;
+#endif
 }
 
 static int rimbaud_connect_to_vsp(struct hv_device *device, u32 ring_size)
@@ -1085,6 +1128,7 @@ static int rimbaud_connect_to_vsp(struct hv_device *device, u32 ring_size)
 	if (ret)
 		return ret;
 
+	rimbaud_dev.device = device;
 	hv_set_drvdata(device, &rimbaud_dev);
 
 	return ret;
@@ -1130,7 +1174,7 @@ static int rimbaud_negotiate_version(struct rimbaud_device *dev)
 	init_completion(&request.wait_event);
 
 	atomic_inc(&dev->vsp_pending);
-	rc = vmbus_sendpacket(dev->device.channel,
+	rc = vmbus_sendpacket(dev->device->channel,
 		negotiate_vsp,
 		negotiate_vsp->header.length,
 		(unsigned long) &request,
@@ -1203,21 +1247,26 @@ static int rimbaud_probe(struct hv_device *device,
 {
 	int rc;
 
-	rc = rimbaud_create_device(&rimbaud_dev);
-	if (rc)
-		return rc;
+	rimbaud_dbg("probing device\n");
 
 	rc = rimbaud_connect_to_vsp(device, rimbaud_ringbuffer_size);
 	if (rc) {
 		rimbaud_err("error connecting to VSP rc %d\n", rc);
-		rimbaud_remove_device(&rimbaud_dev);
 		return rc;
 	}
-
+// FIXME to enable
+#if 0
 	rc = rimbaud_negotiate_version(&rimbaud_dev);
 	if (rc) {
 		rimbaud_err("error negotiating versions rc %d\n", rc);
-		rimbaud_remove_device(&rimbaud_dev);
+		rimbaud_remove_vmbus(device);
+		return rc;
+	}
+#endif
+
+	// create user-mode client library facing device
+	rc = rimbaud_create_device(&rimbaud_dev);
+	if (rc) {
 		rimbaud_remove_vmbus(device);
 		return rc;
 	}

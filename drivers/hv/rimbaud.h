@@ -2,21 +2,21 @@
 #define _RIMBAUD_H
 
 #include <linux/hyperv.h>
-#include <linux/cdev.h>
+#include <linux/miscdevice.h>
 #include <linux/hashtable.h>
 #include <linux/uio.h>
 
 struct rimbaud_device {
-	struct hv_device device;
-	struct cdev cdev;
-	dev_t devno;
+	struct hv_device *device;
+//	struct cdev cdev;
+//	dev_t devno;
 
 	bool removing;
 	atomic_t vsp_pending;
 	wait_queue_head_t wait_remove;
 
-	struct class *class;
-	struct device *chardev;
+//	struct class *class;
+//	struct device *chardev;
 
 	// hash table for opened blob handles, 1024 hash entries
 	DECLARE_HASHTABLE(read_blob_hash, 10);
@@ -147,11 +147,12 @@ struct blob_handle_hash_list {
 	struct hlist_node node;
 	struct list_head head;	 // link list to VSP responses for this handle
 
-	u32 wait_pending;
+	bool closing;		// this blob handle is being closed
+	u32 query_pending;		// pending get_blob_query
+	u32 vsp_request_pending;	// pending get_blob
 	wait_queue_head_t wait_close;
-	wait_queue_head_t wait_response;
 
-	bool closing;	// this blob handle is being closed
+	wait_queue_head_t wait_response;
 };
 
 /*
