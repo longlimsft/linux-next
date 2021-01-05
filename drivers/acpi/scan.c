@@ -674,6 +674,7 @@ int acpi_device_add(struct acpi_device *device,
 	}
 	if (!found) {
 		acpi_device_bus_id = new_bus_id;
+		printk(KERN_ERR "%s: acpi_device_hid(device) %s\n", __func__, acpi_device_hid(device));
 		strcpy(acpi_device_bus_id->bus_id, acpi_device_hid(device));
 		acpi_device_bus_id->instance_no = 0;
 		list_add_tail(&acpi_device_bus_id->node, &acpi_bus_id_list);
