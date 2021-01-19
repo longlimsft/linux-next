@@ -1743,6 +1743,7 @@ static int storvsc_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *scmnd)
 		unsigned long offset_in_hvpg = sgl->offset & ~HV_HYP_PAGE_MASK;
 		unsigned int hvpg_count = HVPFN_UP(offset_in_hvpg + length);
 		u64 hvpfn;
+		int sg_page_count, sg_page_index;
 
 		if (hvpg_count > MAX_PAGE_BUFFER_COUNT) {
 
@@ -1766,6 +1767,8 @@ static int storvsc_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *scmnd)
 		hvpgoff = sgl->offset >> HV_HYP_PAGE_SHIFT;
 
 		cur_sgl = sgl;
+		sg_page_count = PAGE_ALIGN(cur_sgl->offset + cur_sgl->length) >> PAGE_SHIFT;
+		sg_page_index = 0;
 		for (i = 0; i < hvpg_count; i++) {
 			/*
 			 * 'i' is the index of hv pages in the payload and
@@ -1793,8 +1796,18 @@ static int storvsc_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *scmnd)
 			 *    of a page.
 			 */
 			if (hvpgoff_in_page == 0 || i == 0) {
-				hvpfn = page_to_hvpfn(sg_page(cur_sgl));
-				cur_sgl = sg_next(cur_sgl);
+				if (!sg_page_index)
+					hvpfn = page_to_hvpfn(sg_page(cur_sgl));
+				else
+					hvpfn += NR_HV_HYP_PAGES_IN_PAGE;
+
+				if (++sg_page_index == sg_page_count) {
+					cur_sgl = sg_next(cur_sgl);
+					if (cur_sgl) {
+						sg_page_count = PAGE_ALIGN(cur_sgl->offset + cur_sgl->length) >> PAGE_SHIFT;
+						sg_page_index = 0;
+					}
+				}
 			}
 
 			payload->range.pfn_array[i] = hvpfn + hvpgoff_in_page;
