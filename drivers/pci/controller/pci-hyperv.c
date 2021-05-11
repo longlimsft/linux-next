@@ -473,6 +473,9 @@ struct hv_pcibus_device {
 	struct msi_controller msi_chip;
 	struct irq_domain *irq_domain;
 
+	struct list_head compose_msi_msg_ctxt_list;
+	spinlock_t compose_msi_msg_ctxt_list_lock;
+
 	spinlock_t retarget_msi_interrupt_lock;
 
 	struct workqueue_struct *wq;
@@ -550,6 +553,17 @@ struct hv_pci_dev {
 struct hv_pci_compl {
 	struct completion host_event;
 	s32 completion_status;
+};
+
+struct compose_comp_ctxt {
+	struct hv_pci_compl comp_pkt;
+	struct tran_int_desc int_desc;
+};
+
+struct compose_msi_msg_ctxt {
+	struct list_head list;
+	struct pci_packet pci_pkt;
+	struct compose_comp_ctxt comp;
 };
 
 static void hv_pci_onchannelcallback(void *context);
@@ -1293,11 +1307,6 @@ exit_unlock:
 	pci_msi_unmask_irq(data);
 }
 
-struct compose_comp_ctxt {
-	struct hv_pci_compl comp_pkt;
-	struct tran_int_desc int_desc;
-};
-
 static void hv_pci_compose_compl(void *context, struct pci_response *resp,
 				 int resp_packet_size)
 {
@@ -1373,16 +1382,12 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 	struct pci_bus *pbus;
 	struct pci_dev *pdev;
 	struct cpumask *dest;
-	struct compose_comp_ctxt comp;
 	struct tran_int_desc *int_desc;
-	struct {
-		struct pci_packet pci_pkt;
-		union {
-			struct pci_create_interrupt v1;
-			struct pci_create_interrupt2 v2;
-		} int_pkts;
-	} __packed ctxt;
-
+	struct compose_msi_msg_ctxt *ctxt;
+	union {
+		struct pci_create_interrupt v1;
+		struct pci_create_interrupt2 v2;
+	} int_pkts;
 	u32 size;
 	int ret;
 
@@ -1402,18 +1407,24 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 		hv_int_desc_free(hpdev, int_desc);
 	}
 
-	int_desc = kzalloc(sizeof(*int_desc), GFP_ATOMIC);
-	if (!int_desc)
+	ctxt = kzalloc(sizeof(*ctxt), GFP_ATOMIC);
+	if (!ctxt)
 		goto drop_reference;
 
-	memset(&ctxt, 0, sizeof(ctxt));
-	init_completion(&comp.comp_pkt.host_event);
-	ctxt.pci_pkt.completion_func = hv_pci_compose_compl;
-	ctxt.pci_pkt.compl_ctxt = &comp;
+	int_desc = kzalloc(sizeof(*int_desc), GFP_ATOMIC);
+	if (!int_desc) {
+		kfree(ctxt);
+		goto drop_reference;
+	}
+
+	memset(ctxt, 0, sizeof(*ctxt));
+	init_completion(&ctxt->comp.comp_pkt.host_event);
+	ctxt->pci_pkt.completion_func = hv_pci_compose_compl;
+	ctxt->pci_pkt.compl_ctxt = &ctxt->comp;
 
 	switch (hbus->protocol_version) {
 	case PCI_PROTOCOL_VERSION_1_1:
-		size = hv_compose_msi_req_v1(&ctxt.int_pkts.v1,
+		size = hv_compose_msi_req_v1(&int_pkts.v1,
 					dest,
 					hpdev->desc.win_slot.slot,
 					cfg->vector);
@@ -1421,7 +1432,7 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 
 	case PCI_PROTOCOL_VERSION_1_2:
 	case PCI_PROTOCOL_VERSION_1_3:
-		size = hv_compose_msi_req_v2(&ctxt.int_pkts.v2,
+		size = hv_compose_msi_req_v2(&int_pkts.v2,
 					dest,
 					hpdev->desc.win_slot.slot,
 					cfg->vector);
@@ -1434,17 +1445,18 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 		 */
 		dev_err(&hbus->hdev->device,
 			"Unexpected vPCI protocol, update driver.");
+		kfree(ctxt);
 		goto free_int_desc;
 	}
 
-	ret = vmbus_sendpacket(hpdev->hbus->hdev->channel, &ctxt.int_pkts,
-			       size, (unsigned long)&ctxt.pci_pkt,
+	ret = vmbus_sendpacket(hpdev->hbus->hdev->channel, &int_pkts,
+			       size, (unsigned long)&ctxt->pci_pkt,
 			       VM_PKT_DATA_INBAND,
 			       VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED);
 	if (ret) {
 		dev_err(&hbus->hdev->device,
-			"Sending request for interrupt failed: 0x%x",
-			comp.comp_pkt.completion_status);
+			"Sending request for interrupt failed: 0x%x", ret);
+		kfree(ctxt);
 		goto free_int_desc;
 	}
 
@@ -1458,7 +1470,7 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 	 * Since this function is called with IRQ locks held, can't
 	 * do normal wait for completion; instead poll.
 	 */
-	while (!try_wait_for_completion(&comp.comp_pkt.host_event)) {
+	while (!try_wait_for_completion(&ctxt->comp.comp_pkt.host_event)) {
 		unsigned long flags;
 
 		/* 0xFFFF means an invalid PCI VENDOR ID. */
@@ -1494,10 +1506,11 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 
 	tasklet_enable(&channel->callback_event);
 
-	if (comp.comp_pkt.completion_status < 0) {
+	if (ctxt->comp.comp_pkt.completion_status < 0) {
 		dev_err(&hbus->hdev->device,
 			"Request for interrupt failed: 0x%x",
-			comp.comp_pkt.completion_status);
+			ctxt->comp.comp_pkt.completion_status);
+		kfree(ctxt);
 		goto free_int_desc;
 	}
 
@@ -1506,23 +1519,36 @@ static void hv_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 	 * irq_set_chip_data() here would be appropriate, but the lock it takes
 	 * is already held.
 	 */
-	*int_desc = comp.int_desc;
+	*int_desc = ctxt->comp.int_desc;
 	data->chip_data = int_desc;
 
 	/* Pass up the result. */
-	msg->address_hi = comp.int_desc.address >> 32;
-	msg->address_lo = comp.int_desc.address & 0xffffffff;
-	msg->data = comp.int_desc.data;
+	msg->address_hi = ctxt->comp.int_desc.address >> 32;
+	msg->address_lo = ctxt->comp.int_desc.address & 0xffffffff;
+	msg->data = ctxt->comp.int_desc.data;
 
 	put_pcichild(hpdev);
+	kfree(ctxt);
 	return;
 
 enable_tasklet:
 	tasklet_enable(&channel->callback_event);
+
+	/*
+	 * Move uncompleted context to the leftover list.
+	 * The host may send completion at a later time, and we ignore this
+	 * completion but keep the memory reference valid.
+	 */
+	spin_lock(&hbus->compose_msi_msg_ctxt_list_lock);
+	list_add_tail(&ctxt->list, &hbus->compose_msi_msg_ctxt_list);
+	spin_unlock(&hbus->compose_msi_msg_ctxt_list_lock);
+
 free_int_desc:
 	kfree(int_desc);
+
 drop_reference:
 	put_pcichild(hpdev);
+
 return_null_message:
 	msg->address_hi = 0;
 	msg->address_lo = 0;
@@ -3076,9 +3102,11 @@ static int hv_pci_probe(struct hv_device *hdev,
 	INIT_LIST_HEAD(&hbus->children);
 	INIT_LIST_HEAD(&hbus->dr_list);
 	INIT_LIST_HEAD(&hbus->resources_for_children);
+	INIT_LIST_HEAD(&hbus->compose_msi_msg_ctxt_list);
 	spin_lock_init(&hbus->config_lock);
 	spin_lock_init(&hbus->device_list_lock);
 	spin_lock_init(&hbus->retarget_msi_interrupt_lock);
+	spin_lock_init(&hbus->compose_msi_msg_ctxt_list_lock);
 	hbus->wq = alloc_ordered_workqueue("hv_pci_%x", 0,
 					   hbus->sysdata.domain);
 	if (!hbus->wq) {
@@ -3282,6 +3310,7 @@ static int hv_pci_bus_exit(struct hv_device *hdev, bool keep_devs)
 static int hv_pci_remove(struct hv_device *hdev)
 {
 	struct hv_pcibus_device *hbus;
+	struct compose_msi_msg_ctxt *ctxt, *tmp;
 	int ret;
 
 	hbus = hv_get_drvdata(hdev);
@@ -3318,6 +3347,10 @@ static int hv_pci_remove(struct hv_device *hdev)
 
 	hv_put_dom_num(hbus->sysdata.domain);
 
+	list_for_each_entry_safe(ctxt, tmp, &hbus->compose_msi_msg_ctxt_list, list) {
+		list_del(&ctxt->list);
+		kfree(ctxt);
+	}
 	kfree(hbus);
 	return ret;
 }
