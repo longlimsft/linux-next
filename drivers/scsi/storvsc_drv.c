@@ -426,6 +426,7 @@ struct storvsc_cmd_request {
 	u32 payload_sz;
 
 	struct vstor_packet vstor_packet;
+	u64 jiffies;
 };
 
 
@@ -1054,6 +1055,7 @@ static void storvsc_on_io_completion(struct storvsc_device *stor_device,
 {
 	struct vstor_packet *stor_pkt;
 	struct hv_device *device = stor_device->device;
+	u64 latency_s;
 
 	stor_pkt = &request->vstor_packet;
 
@@ -1080,6 +1082,26 @@ static void storvsc_on_io_completion(struct storvsc_device *stor_device,
 	stor_pkt->vm_srb.srb_status = vstor_packet->vm_srb.srb_status;
 	stor_pkt->vm_srb.sense_info_length =
 	vstor_packet->vm_srb.sense_info_length;
+
+	latency_s = (get_jiffies_64() - request->jiffies) / HZ;
+	if (latency_s > 2) {
+		struct timespec ts;
+		unsigned long long hour, minute, second;
+
+		getnstimeofday(&ts);
+		hour = (ts.tv_sec / 3600) % 24;
+		minute = (ts.tv_sec / 60) % 60;
+		second = ts.tv_sec % 60;
+
+		trace_printk(
+			"%llu:%llu:%llu cmd 0x%x lun 0x%x scsi status 0x%x srb status 0x%x latency(s) %llu\n",
+			hour, minute, second,
+			stor_pkt->vm_srb.cdb[0],
+			stor_pkt->vm_srb.lun,
+			vstor_packet->vm_srb.scsi_status,
+			vstor_packet->vm_srb.srb_status,
+			latency_s);
+	}
 
 	if (vstor_packet->vm_srb.scsi_status != 0 ||
 	    vstor_packet->vm_srb.srb_status != SRB_STATUS_SUCCESS)
@@ -1394,6 +1416,8 @@ found_channel:
 			       VM_PKT_DATA_INBAND,
 			       VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED);
 	}
+
+	request->jiffies = get_jiffies_64();
 
 	if (ret != 0)
 		return ret;
