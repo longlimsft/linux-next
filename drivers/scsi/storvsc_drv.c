@@ -292,6 +292,9 @@ struct vmstorage_protocol_version {
 #define STORAGE_CHANNEL_REMOVABLE_FLAG		0x1
 #define STORAGE_CHANNEL_EMULATED_IDE_FLAG	0x2
 
+/* Status code in struct vstor_packet */
+#define STATUS_QUOTA_EXCEEDED	0xC0000044
+
 struct vstor_packet {
 	/* Requested operation type */
 	enum vstor_packet_operation operation;
@@ -1000,7 +1003,7 @@ done:
 static void storvsc_handle_error(struct vmscsi_request *vm_srb,
 				struct scsi_cmnd *scmnd,
 				struct Scsi_Host *host,
-				u8 asc, u8 ascq)
+				u8 asc, u8 ascq, u32 status)
 {
 	struct storvsc_scan_work *wrk;
 	void (*process_err_fn)(struct work_struct *work);
@@ -1034,6 +1037,17 @@ static void storvsc_handle_error(struct vmscsi_request *vm_srb,
 		 */
 		case TEST_UNIT_READY:
 			break;
+
+		case READ_6:
+		case READ_10:
+		case READ_12:
+		case READ_16:
+			if (status == STATUS_QUOTA_EXCEEDED) {
+				set_host_byte(scmnd, DID_REQUEUE);
+				break;
+			}
+			/* fallthrough */
+
 		default:
 			set_host_byte(scmnd, DID_ERROR);
 		}
@@ -1106,7 +1120,8 @@ static void storvsc_command_completion(struct storvsc_cmd_request *cmd_request,
 
 	if (vm_srb->srb_status != SRB_STATUS_SUCCESS) {
 		storvsc_handle_error(vm_srb, scmnd, host, sense_hdr.asc,
-					 sense_hdr.ascq);
+					 sense_hdr.ascq,
+					 cmd_request->vstor_packet.status);
 		/*
 		 * The Windows driver set data_transfer_length on
 		 * SRB_STATUS_DATA_OVERRUN. On other errors, this value
