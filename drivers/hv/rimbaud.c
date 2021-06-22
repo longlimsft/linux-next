@@ -13,7 +13,57 @@
 #include <linux/cred.h>
 #include <linux/debugfs.h>
 #include <linux/pagemap.h>
-#include "rimbaud.h"
+#include <linux/hyperv.h>
+#include <linux/miscdevice.h>
+//#include <linux/hashtable.h>
+#include <linux/uio.h>
+
+#include <uapi/misc/rimbaud.h>
+
+struct rimbaud_device {
+	struct hv_device *device;
+	bool removing;
+
+	struct list_head vsp_pending_list;
+	spinlock_t vsp_pending_lock;
+	wait_queue_head_t wait_vsp;
+
+	wait_queue_head_t wait_files;
+	atomic_t file_count;
+};
+
+/* VSP messages */
+enum xs_fastpath_vsp_request_type {
+    XS_FASTPATH_DRIVER_REQUEST_FIRST     = 0x100,
+    XS_FASTPATH_DRIVER_USER_REQUEST      = 0x100,
+    XS_FASTPATH_DRIVER_REGISTER_BUFFER   = 0x101,
+    XS_FASTPATH_DRIVER_DEREGISTER_BUFFER = 0x102,
+    XS_FASTPATH_DRIVER_REQUEST_MAX       = 0x103
+};
+
+/* VSC->VSP request */
+struct xs_fastpath_vsp_request {
+    u32 version;
+    u32 timeout_ms;
+    u32 data_buffer_offset;
+    u32 data_buffer_length;
+    u32 data_buffer_valid;
+    u32 operation_type;
+    u32 request_buffer_offset;
+    u32 request_buffer_length;
+    u32 response_buffer_offset;
+    u32 response_buffer_length;
+    guid_t transaction_id;
+} __packed;
+
+/* VSP->VSC response */
+struct xs_fastpath_vsp_response {
+	u32 length;
+	u32 error;
+	u32 response_len;
+} __packed;
+
+#define RIMBAUD_MAX_PAGES 8192
 
 #ifdef CONFIG_DEBUG_FS
 struct dentry *rimbaud_debugfs_root;
@@ -200,6 +250,9 @@ static long rimbaud_ioctl_user_request(struct file *filp, unsigned long arg)
 	if (!request.request_len || !request.response_len)
 		return -EINVAL;
 
+	if (request.data_len && request.data_len < request.data_valid)
+		return -EINVAL;
+
 	request_ctx = kzalloc(sizeof(*request_ctx), GFP_KERNEL);
 	if (!request_ctx)
 		return -ENOMEM;
@@ -264,7 +317,7 @@ static long rimbaud_ioctl_user_request(struct file *filp, unsigned long arg)
 			data_num_pages);
 		vsp_request->data_buffer_offset = data_start;
 		vsp_request->data_buffer_length = request.data_len;
-		vsp_request->data_buffer_valid = 1;
+		vsp_request->data_buffer_valid = request.data_valid;
 	}
 
 	fill_in_page_buffer(pfn_array, &page_idx, request_pages,
