@@ -70,6 +70,7 @@
 enum pci_protocol_version_t {
 	PCI_PROTOCOL_VERSION_1_1 = PCI_MAKE_VERSION(1, 1),	/* Win10 */
 	PCI_PROTOCOL_VERSION_1_2 = PCI_MAKE_VERSION(1, 2),	/* RS1 */
+	PCI_PROTOCOL_VERSION_1_3 = PCI_MAKE_VERSION(1, 3),	/* Vibranium */
 };
 
 #define CPU_AFFINITY_ALL	-1ULL
@@ -79,6 +80,7 @@ enum pci_protocol_version_t {
  * first.
  */
 static enum pci_protocol_version_t pci_protocol_versions[] = {
+	PCI_PROTOCOL_VERSION_1_3,
 	PCI_PROTOCOL_VERSION_1_2,
 	PCI_PROTOCOL_VERSION_1_1,
 };
@@ -131,6 +133,7 @@ enum pci_message_type {
 	PCI_RESOURCES_ASSIGNED2		= PCI_MESSAGE_BASE + 0x16,
 	PCI_CREATE_INTERRUPT_MESSAGE2	= PCI_MESSAGE_BASE + 0x17,
 	PCI_DELETE_INTERRUPT_MESSAGE2	= PCI_MESSAGE_BASE + 0x18, /* unused */
+	PCI_BUS_RELATIONS2		= PCI_MESSAGE_BASE + 0x19,
 	PCI_MESSAGE_MAXIMUM
 };
 
@@ -175,6 +178,27 @@ struct pci_function_description {
 	union win_slot_encoding win_slot;
 	u32	ser;	/* serial number */
 } __packed;
+
+enum pci_device_description_flags {
+	HV_PCI_DEVICE_FLAG_NONE			= 0x0,
+	HV_PCI_DEVICE_FLAG_NUMA_AFFINITY	= 0x1,
+};
+
+struct pci_function_description2 {
+	u16	v_id;	/* vendor ID */
+	u16	d_id;	/* device ID */
+	u8	rev;
+	u8	prog_intf;
+	u8	subclass;
+	u8	base_class;
+	u32	subsystem_id;
+	union	win_slot_encoding win_slot;
+	u32	ser;	/* serial number */
+	u32	flags;
+	u16	virtual_numa_node;
+	u16	reserved;
+} __packed;
+
 
 /**
  * struct hv_msi_desc
@@ -310,6 +334,13 @@ struct pci_bus_relations {
 	u32 device_count;
 	struct pci_function_description func[0];
 } __packed;
+
+struct pci_bus_relations2 {
+	struct pci_incoming_message incoming;
+	u32 device_count;
+	struct pci_function_description2 func[0];
+} __packed;
+
 
 struct pci_q_res_req_response {
 	struct vmpacket_descriptor hdr;
@@ -1095,6 +1126,7 @@ static void hv_compose_msi_msg(struct pci_dev *pdev, unsigned int irq,
 		break;
 
 	case PCI_PROTOCOL_VERSION_1_2:
+	case PCI_PROTOCOL_VERSION_1_3:
 		size = hv_compose_msi_req_v2(&ctxt.int_pkts.v2,
 					     cfg->domain,
 					     hpdev->desc.win_slot.slot,
@@ -1456,6 +1488,28 @@ static void hv_pci_remove_slots(struct hv_pcibus_device *hbus)
 	}
 }
 
+/*
+ * Set NUMA node for the devices on the bus
+ */
+static void hv_pci_assign_numa_node(struct hv_pcibus_device *hbus)
+{
+	struct pci_dev *dev;
+	struct pci_bus *bus = hbus->pci_bus;
+	struct hv_pci_dev *hv_dev;
+
+	list_for_each_entry(dev, &bus->devices, bus_list) {
+		hv_dev = get_pcichild_wslot(hbus, devfn_to_wslot(dev->devfn));
+		if (!hv_dev)
+			continue;
+
+		if (hv_dev->desc.flags & HV_PCI_DEVICE_FLAG_NUMA_AFFINITY)
+			set_dev_node(&dev->dev, hv_dev->desc.virtual_numa_node);
+
+		put_pcichild(hv_dev);
+	}
+}
+
+
 /**
  * create_root_hv_pci_bus() - Expose a new root PCI bus
  * @hbus:	Root PCI bus, as understood by this driver
@@ -1475,6 +1529,7 @@ static int create_root_hv_pci_bus(struct hv_pcibus_device *hbus)
 
 	pci_lock_rescan_remove();
 	pci_scan_child_bus(hbus->pci_bus);
+	hv_pci_assign_numa_node(hbus);
 	pci_bus_assign_resources(hbus->pci_bus);
 	hv_pci_assign_slots(hbus);
 	pci_bus_add_devices(hbus->pci_bus);
@@ -1751,6 +1806,7 @@ static void pci_devices_present_work(struct work_struct *work)
 		 */
 		pci_lock_rescan_remove();
 		pci_scan_child_bus(hbus->pci_bus);
+		hv_pci_assign_numa_node(hbus);
 		hv_pci_assign_slots(hbus);
 		pci_unlock_rescan_remove();
 		break;
@@ -1837,6 +1893,47 @@ static void hv_pci_devices_present(struct hv_pcibus_device *hbus,
 	if (hv_pci_start_relations_work(hbus, dr))
 		kfree(dr);
 }
+
+/**
+ * hv_pci_devices_present2() - Handle list of new children
+ * @hbus:	Root PCI bus, as understood by this driver
+ * @relations:	Packet from host listing children
+ *
+ * This function is the v2 version of hv_pci_devices_present()
+ */
+static void hv_pci_devices_present2(struct hv_pcibus_device *hbus,
+				    struct pci_bus_relations2 *relations)
+{
+	struct hv_dr_state *dr;
+	int i;
+
+	dr = kzalloc(offsetof(struct hv_dr_state, func) +
+		     (sizeof(struct hv_pcidev_description) *
+		      (relations->device_count)), GFP_NOWAIT);
+
+	if (!dr)
+		return;
+
+	dr->device_count = relations->device_count;
+	for (i = 0; i < dr->device_count; i++) {
+		dr->func[i].v_id = relations->func[i].v_id;
+		dr->func[i].d_id = relations->func[i].d_id;
+		dr->func[i].rev = relations->func[i].rev;
+		dr->func[i].prog_intf = relations->func[i].prog_intf;
+		dr->func[i].subclass = relations->func[i].subclass;
+		dr->func[i].base_class = relations->func[i].base_class;
+		dr->func[i].subsystem_id = relations->func[i].subsystem_id;
+		dr->func[i].win_slot = relations->func[i].win_slot;
+		dr->func[i].ser = relations->func[i].ser;
+		dr->func[i].flags = relations->func[i].flags;
+		dr->func[i].virtual_numa_node =
+			relations->func[i].virtual_numa_node;
+	}
+
+	if (hv_pci_start_relations_work(hbus, dr))
+		kfree(dr);
+}
+
 
 /**
  * hv_eject_device_work() - Asynchronously handles ejection
@@ -1943,6 +2040,7 @@ static void hv_pci_onchannelcallback(void *context)
 	struct pci_response *response;
 	struct pci_incoming_message *new_message;
 	struct pci_bus_relations *bus_rel;
+	struct pci_bus_relations2 *bus_rel2;
 	struct pci_dev_incoming *dev_message;
 	struct hv_pci_dev *hpdev;
 
@@ -2008,6 +2106,22 @@ static void hv_pci_onchannelcallback(void *context)
 
 				hv_pci_devices_present(hbus, bus_rel);
 				break;
+
+			case PCI_BUS_RELATIONS2:
+
+				bus_rel2 = (struct pci_bus_relations2 *)buffer;
+				if (bytes_recvd <
+				    offsetof(struct pci_bus_relations2, func) +
+				    (sizeof(struct pci_function_description2) *
+				     (bus_rel2->device_count))) {
+					dev_err(&hbus->hdev->device,
+						"bus relations v2 too small\n");
+					break;
+				}
+
+				hv_pci_devices_present2(hbus, bus_rel2);
+				break;
+
 
 			case PCI_EJECT:
 
